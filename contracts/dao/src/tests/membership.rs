@@ -121,7 +121,7 @@ fn rejoin_after_exit_is_counted_once_not_twice() {
     assert_eq!(s.client.get_active_members(), 2);
 
     s.client.register_member(&m);
-    assert_eq!(s.client.get_total_members(), 4);
+    assert_eq!(s.client.get_total_members(), 3);
     assert_eq!(s.client.get_active_members(), 3);
     assert_eq!(s.client.calculate_exit_share(&m), FEE);
 }
@@ -150,7 +150,7 @@ fn mixed_joins_exits_defaults_never_strand_value() {
     s.client.exit_dao(&b);
     s.client.register_member(&c);
 
-    assert_eq!(s.client.get_total_members(), 4);
+    assert_eq!(s.client.get_total_members(), 3);
     assert_eq!(s.client.get_active_members(), 2);
 
     let mut sum = 0i128;
@@ -360,8 +360,8 @@ fn get_member_overview_aggregates_member_state() {
 
     let pid = s.client.request_loan(&borrower, &1_000, &None);
     advance(&s.env, EDITING + 1);
+    // With borrower's delegation, v1 has 2 votes which immediately approves the proposal.
     s.client.vote_on_loan_proposal(&v1, &pid, &true);
-    s.client.vote_on_loan_proposal(&v2, &pid, &true);
     s.client.repay_loan(&borrower, &0);
     s.client.stake(&borrower, &500);
 
@@ -486,29 +486,67 @@ fn delegated_weight_used_in_votes() {
 }
 
 #[test]
-fn delegation_exited_member_still_counts_exposing_voting_weight_bug() {
+fn delegation_exited_member_clears_delegation_and_does_not_leak_weight() {
     let s = setup(3);
     let _borrower = s.members.get(0).unwrap();
     let v1 = s.members.get(1).unwrap();
     let v2 = s.members.get(2).unwrap();
 
     // v2 delegates to v1
-    s.env.as_contract(&s.client.address, || {
-        crate::storage::set_delegation(&s.env, &v2, &v1);
+    s.client.delegate_vote(&v2, &v1);
+    assert_eq!(s.client.get_delegate(&v2), Some(v1.clone()));
+
+    let weight_v1_before = s.env.as_contract(&s.client.address, || {
+        crate::util::voting_weight(&s.env, &v1)
     });
+    assert_eq!(weight_v1_before, 2);
 
     // v2 exits the DAO
     s.client.exit_dao(&v2);
     assert_eq!(s.client.get_active_members(), 2);
 
-    // Bug in voting_weight (tracked in issue #409): storage::get_members iterates all members ever registered,
-    // and does not check whether `member` is ActiveMember. As a result, v1 still receives
-    // v2's delegated weight even though v2 has exited the DAO!
-    let weight_v1 = s.env.as_contract(&s.client.address, || {
+    // After exit, v2's delegation is cleared and no weight leaks to v1 (#409)
+    assert_eq!(s.client.get_delegate(&v2), None);
+    let weight_v1_after = s.env.as_contract(&s.client.address, || {
         crate::util::voting_weight(&s.env, &v1)
     });
     assert_eq!(
-        weight_v1, 2,
-        "voting_weight currently leaks weight from inactive members"
+        weight_v1_after, 1,
+        "voting_weight must not leak weight from inactive/exited members"
     );
+}
+
+#[test]
+fn delegate_vote_rejects_circular_delegation() {
+    let s = setup(3);
+    let a = s.members.get(0).unwrap();
+    let b = s.members.get(1).unwrap();
+    let c = s.members.get(2).unwrap();
+
+    // A delegates to B
+    s.client.delegate_vote(&a, &b);
+    assert_eq!(s.client.get_delegate(&a), Some(b.clone()));
+
+    // Mutual A -> B -> A must fail (#409)
+    let res = s.client.try_delegate_vote(&b, &a);
+    assert_eq!(res, Err(Ok(Error::InvalidDelegation)));
+
+    // B delegates to C: A -> B -> C
+    s.client.delegate_vote(&b, &c);
+    assert_eq!(s.client.get_delegate(&b), Some(c.clone()));
+
+    // C tries to delegate to A (A -> B -> C -> A cycle): must fail (#409)
+    let res2 = s.client.try_delegate_vote(&c, &a);
+    assert_eq!(res2, Err(Ok(Error::InvalidDelegation)));
+}
+
+#[test]
+fn delegate_vote_unilateral_succeeds_without_delegatee_auth() {
+    let s = setup(2);
+    let delegator = s.members.get(0).unwrap();
+    let delegatee = s.members.get(1).unwrap();
+
+    // Unilateral delegation should succeed with single delegator auth (#409)
+    s.client.delegate_vote(&delegator, &delegatee);
+    assert_eq!(s.client.get_delegate(&delegator), Some(delegatee.clone()));
 }

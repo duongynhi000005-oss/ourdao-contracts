@@ -278,6 +278,9 @@ fn staking_curve_boundary_voting_weight() {
     let prop = s.client.get_loan_proposal(&pid).unwrap();
     assert_eq!(prop.for_votes, 6); // 1 base + 5 bonus
 
+    // Repay the first loan so borrower no longer has an active loan.
+    s.client.repay_loan(&borrower, &pid);
+
     // Stake above the cap: 3600 tokens should still give only 5 bonus votes = 6 voting weight.
     s.client.unstake(&staker, &at_5_bonus);
     let above_5_bonus = STAKE_WEIGHT_UNIT * 6 * 6; // 3600

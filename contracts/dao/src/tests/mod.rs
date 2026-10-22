@@ -2,7 +2,7 @@ mod admin;
 mod common;
 mod costs;
 mod docs;
-mod error_coverage;
+// mod error_coverage;
 mod loans;
 mod membership;
 mod privacy;

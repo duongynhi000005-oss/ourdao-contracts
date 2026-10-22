@@ -112,6 +112,9 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
             .publish((symbol_short!("name_rel"),), (name, member.clone()));
     }
 
+    // Clear delegation on exit so the member no longer delegates their vote (#409).
+    storage::remove_delegation(env, &member);
+
     record.status = MemberStatus::Inactive;
     record.share_balance = 0;
     // `share` was computed above against the total that still included this
@@ -208,13 +211,30 @@ pub fn member_overview(env: &Env, member: &Address) -> Result<MemberOverview, Er
 pub fn delegate_vote(env: &Env, delegator: Address, delegatee: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    delegator.require_auth();
 
+    // Single require_auth via require_active_member to avoid Error(Auth, ExistingValue) (#409)
     util::require_active_member(env, &delegator)?;
-    util::require_active_member(env, &delegatee)?;
+    // Delegatee must be an active member, but unilateral delegation does not require delegatee auth (#409)
+    util::check_active_member(env, &delegatee)?;
 
     if delegator == delegatee {
         return Err(Error::InvalidDelegation);
+    }
+
+    // Detect circular delegation: traverse delegatee's delegation chain.
+    // If it reaches delegator, reject with InvalidDelegation (#409).
+    let mut current = delegatee.clone();
+    let max_depth = storage::get_active_members(env);
+    let mut steps = 0;
+    while let Some(next) = storage::get_delegation(env, &current) {
+        if next == delegator {
+            return Err(Error::InvalidDelegation);
+        }
+        current = next;
+        steps += 1;
+        if steps > max_depth {
+            return Err(Error::InvalidDelegation);
+        }
     }
 
     storage::set_delegation(env, &delegator, &delegatee);

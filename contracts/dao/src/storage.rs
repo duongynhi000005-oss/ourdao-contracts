@@ -514,6 +514,11 @@ pub fn set_delegation(env: &Env, member: &Address, delegatee: &Address) {
     extend_persistent(env, &key);
 }
 
+pub fn remove_delegation(env: &Env, member: &Address) {
+    let key = DataKey::Delegation(member.clone());
+    env.storage().persistent().remove(&key);
+}
+
 // ---------- multi-token treasury (#236) ----------
 
 /// The base token is always whitelisted; any other asset only while its

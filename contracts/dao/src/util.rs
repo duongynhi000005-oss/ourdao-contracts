@@ -84,14 +84,23 @@ pub fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
     }
 }
 
-/// Authorizes `caller` and returns their active-member record, or errors.
-pub fn require_active_member(env: &Env, caller: &Address) -> Result<Member, Error> {
-    caller.require_auth();
-    match storage::get_member(env, caller) {
+/// Returns the active-member record for `who` without asserting auth.
+pub fn check_active_member(env: &Env, who: &Address) -> Result<Member, Error> {
+    match storage::get_member(env, who) {
         Some(m) if m.status == MemberStatus::ActiveMember => Ok(m),
         Some(_) => Err(Error::MemberNotActive),
         None => Err(Error::NotMember),
     }
+}
+
+pub fn is_active_member(env: &Env, who: &Address) -> bool {
+    matches!(storage::get_member(env, who), Some(m) if m.status == MemberStatus::ActiveMember)
+}
+
+/// Authorizes `caller` and returns their active-member record, or errors.
+pub fn require_active_member(env: &Env, caller: &Address) -> Result<Member, Error> {
+    caller.require_auth();
+    check_active_member(env, caller)
 }
 
 /// One base vote per active member, plus a quadratic (square-root) boost for
@@ -102,6 +111,10 @@ pub fn voting_weight(env: &Env, who: &Address) -> i128 {
     }
     let mut total = BASE_VOTE_WEIGHT + stake_boost(storage::get_stake(env, who));
     for member in storage::get_members(env).iter() {
+        // Exited/inactive members must not contribute delegated voting weight (#409)
+        if !is_active_member(env, &member) {
+            continue;
+        }
         if let Some(delegatee) = storage::get_delegation(env, &member) {
             if delegatee == *who {
                 total += BASE_VOTE_WEIGHT + stake_boost(storage::get_stake(env, &member));
