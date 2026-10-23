@@ -33,13 +33,17 @@ fn validate_policy(policy: &LoanPolicy) -> Result<(), Error> {
     Ok(())
 }
 
-/// Probe `token` with a read-only `balance` call so a wrong address (an
-/// account, a non-token contract, or a typo) is rejected at initialization
-/// instead of bricking every later transfer. `try_` calls turn a missing
+/// Probe `token` with read-only `decimals` and `balance` calls so a wrong address
+/// (an account, a non-token contract, or a typo) is rejected up front
+/// instead of bricking later token interactions (#275). `try_` calls turn a missing
 /// contract or missing function into an error rather than a trap.
 fn validate_token(env: &Env, token: &Address) -> Result<(), Error> {
-    match token::Client::new(env, token).try_balance(&env.current_contract_address()) {
-        Ok(Ok(_)) => Ok(()),
+    let client = token::Client::new(env, token);
+    match (
+        client.try_decimals(),
+        client.try_balance(&env.current_contract_address()),
+    ) {
+        (Ok(Ok(_)), Ok(Ok(_))) => Ok(()),
         _ => Err(Error::InvalidToken),
     }
 }
@@ -327,23 +331,4 @@ pub fn remove_token(env: &Env, caller: Address, token: Address) -> Result<(), Er
     env.events()
         .publish((symbol_short!("tok_rem"),), (caller, token));
     Ok(())
-
-/// Try to execute a pending policy update, if the timelock has expired and the
-/// caller is an admin. Returns `TimelockNotExpired` if the timelock has not yet
-/// elapsed, and `NoPendingPolicy` if there is no pending update.
-#[allow(deprecated)]
-pub fn try_execute_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
-    let pending = storage::get_pending_policy_update(env).ok_or(Error::NoPendingPolicy)?;
-    if env.ledger().timestamp() < pending.execution_time {
-        return Err(Error::TimelockNotExpired);
-    }
-    // Clear the pending update before applying it, in case execution fails
-    storage::remove_pending_policy_update(env);
-    storage::set_policy(env, &caller, pending.policy)?;
-    extend_instance(env);
-    env.events().publish((symbol_short!(\"policy\"),), (pending.policy, pending.policy));
-    Ok(())
-}
-
 }

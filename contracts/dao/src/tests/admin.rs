@@ -278,7 +278,10 @@ fn only_admin_can_unpause_even_when_a_dedicated_pauser_exists() {
 
     // The emergency pauser may stop the DAO but must not be able to resume it.
     assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
-    assert!(s.client.is_paused(), "unauthorised unpause must not change state");
+    assert!(
+        s.client.is_paused(),
+        "unauthorised unpause must not change state"
+    );
 
     // An unrelated address must likewise be rejected without clearing the pause.
     assert_eq!(s.client.try_unpause(&outsider), Err(Ok(Error::NotAdmin)));
@@ -747,4 +750,54 @@ fn pauser_can_pause_but_cannot_unpause() {
 
     // Revoked pauser can no longer pause
     assert_eq!(s.client.try_pause(&pauser), Err(Ok(Error::NotAdmin)));
+}
+
+// ==================== issue #275: validate token contract before whitelisting ====================
+
+#[soroban_sdk::contract]
+struct TokenWithoutDecimals;
+
+#[soroban_sdk::contractimpl]
+impl TokenWithoutDecimals {
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        0
+    }
+}
+
+#[test]
+fn propose_token_addition_rejects_account_address() {
+    let s = setup(3);
+    let not_a_contract = Address::generate(&s.env);
+    let res = s
+        .client
+        .try_propose_token_addition(&s.admin, &not_a_contract);
+    assert_eq!(res, Err(Ok(Error::InvalidToken)));
+}
+
+#[test]
+fn propose_token_addition_rejects_contract_that_is_not_a_token() {
+    let s = setup(3);
+    let non_token = s.env.register(OurDao, ());
+    let res = s.client.try_propose_token_addition(&s.admin, &non_token);
+    assert_eq!(res, Err(Ok(Error::InvalidToken)));
+}
+
+#[test]
+fn propose_token_addition_rejects_contract_missing_decimals() {
+    let s = setup(3);
+    let missing_decimals = s.env.register(TokenWithoutDecimals, ());
+    let res = s
+        .client
+        .try_propose_token_addition(&s.admin, &missing_decimals);
+    assert_eq!(res, Err(Ok(Error::InvalidToken)));
+}
+
+#[test]
+fn propose_token_addition_accepts_valid_sep41_token() {
+    let s = setup(3);
+    let issuer = Address::generate(&s.env);
+    let token = s.env.register_stellar_asset_contract_v2(issuer).address();
+    let res = s.client.try_propose_token_addition(&s.admin, &token);
+    assert_eq!(res, Ok(Ok(())));
+    assert!(!s.client.is_token_whitelisted(&token));
 }

@@ -24,6 +24,10 @@ pub struct RejectingToken;
 
 #[soroban_sdk::contractimpl]
 impl RejectingToken {
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
+
     pub fn mint(env: Env, to: Address, amount: i128) {
         let key = RejectingTokenKey::Balance(to);
         let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
@@ -183,7 +187,9 @@ pub fn create_token_with_decimals(env: &Env, decimals: u32) -> token::Client<'_>
     let client = token::Client::new(env, &token_id);
 
     // Set decimals through metadata
-    env.storage().instance().set(&("decimals", &token_id), &decimals);
+    env.storage()
+        .instance()
+        .set(&("decimals", &token_id), &decimals);
 
     client
 }
