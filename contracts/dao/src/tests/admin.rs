@@ -278,7 +278,10 @@ fn only_admin_can_unpause_even_when_a_dedicated_pauser_exists() {
 
     // The emergency pauser may stop the DAO but must not be able to resume it.
     assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
-    assert!(s.client.is_paused(), "unauthorised unpause must not change state");
+    assert!(
+        s.client.is_paused(),
+        "unauthorised unpause must not change state"
+    );
 
     // An unrelated address must likewise be rejected without clearing the pause.
     assert_eq!(s.client.try_unpause(&outsider), Err(Ok(Error::NotAdmin)));
@@ -622,6 +625,16 @@ fn token_whitelist_lifecycle() {
         s.client.try_remove_token(&s.admin, &extra),
         Err(Ok(Error::TokenNotWhitelisted))
     );
+}
+
+#[test]
+fn remove_token_rejects_base_token() {
+    let s = setup(1);
+    let base = s.token.address.clone();
+    assert!(s.client.is_token_whitelisted(&base));
+    let err = s.client.try_remove_token(&s.admin, &base);
+    assert_eq!(err, Err(Ok(Error::CannotRemoveBaseToken)));
+    assert!(s.client.is_token_whitelisted(&base));
 }
 
 // Admin list handling uses host-side lookups (#357); the list stays a set.
