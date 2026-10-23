@@ -96,4 +96,6 @@ pub enum Error {
     TooManyOpenProposals = 90,
     /// A borrower cannot vote on their own loan proposal (#327).
     BorrowerCannotVote = 91,
+    /// Cannot remove a token while the treasury still holds a balance of that asset (#272).
+    TokenHasBalance = 92,
 }

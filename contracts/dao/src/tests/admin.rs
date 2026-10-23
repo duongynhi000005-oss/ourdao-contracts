@@ -278,7 +278,10 @@ fn only_admin_can_unpause_even_when_a_dedicated_pauser_exists() {
 
     // The emergency pauser may stop the DAO but must not be able to resume it.
     assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
-    assert!(s.client.is_paused(), "unauthorised unpause must not change state");
+    assert!(
+        s.client.is_paused(),
+        "unauthorised unpause must not change state"
+    );
 
     // An unrelated address must likewise be rejected without clearing the pause.
     assert_eq!(s.client.try_unpause(&outsider), Err(Ok(Error::NotAdmin)));
@@ -747,4 +750,50 @@ fn pauser_can_pause_but_cannot_unpause() {
 
     // Revoked pauser can no longer pause
     assert_eq!(s.client.try_pause(&pauser), Err(Ok(Error::NotAdmin)));
+}
+
+// ==================== issue #272: block remove_token while treasury holds asset ====================
+
+#[test]
+fn remove_token_while_treasury_holds_asset_rejected() {
+    let s = setup(3);
+    let asset = whitelist_second_asset(&s, 5_000);
+
+    // Verify asset is whitelisted and has a positive treasury balance
+    assert!(s.client.is_token_whitelisted(&asset.address));
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        5_000
+    );
+
+    // Removing a token with positive treasury balance must fail with TokenHasBalance
+    let res = s.client.try_remove_token(&s.admin, &asset.address);
+    assert_eq!(res, Err(Ok(Error::TokenHasBalance)));
+
+    // Token must remain whitelisted after rejected removal
+    assert!(s.client.is_token_whitelisted(&asset.address));
+
+    // Drain treasury balance to zero
+    asset.transfer(&s.client.address, &s.admin, &5_000);
+    assert_eq!(s.client.get_treasury_balance_in_asset(&asset.address), 0);
+
+    // Removing an empty token succeeds
+    s.client.remove_token(&s.admin, &asset.address);
+    assert!(!s.client.is_token_whitelisted(&asset.address));
+
+    // Attempting to remove again returns TokenNotWhitelisted
+    let res_again = s.client.try_remove_token(&s.admin, &asset.address);
+    assert_eq!(res_again, Err(Ok(Error::TokenNotWhitelisted)));
+}
+
+#[test]
+fn remove_token_with_zero_balance_succeeds_immediately() {
+    let s = setup(3);
+    let asset = whitelist_second_asset(&s, 0);
+
+    assert!(s.client.is_token_whitelisted(&asset.address));
+    assert_eq!(s.client.get_treasury_balance_in_asset(&asset.address), 0);
+
+    s.client.remove_token(&s.admin, &asset.address);
+    assert!(!s.client.is_token_whitelisted(&asset.address));
 }

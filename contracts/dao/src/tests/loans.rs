@@ -1016,6 +1016,13 @@ fn loan_in_removed_asset_can_still_be_repaid() {
     s.client.vote_on_loan_proposal(&v2, &pid, &true);
     assert_eq!(asset.balance(&borrower), 2_000);
 
+    // Treasury still holds 8,000 of asset B; removing it must fail with TokenHasBalance (#272)
+    assert_eq!(
+        s.client.try_remove_token(&s.admin, &asset.address),
+        Err(Ok(Error::TokenHasBalance))
+    );
+    // Drain remaining treasury balance so token can be removed
+    asset.transfer(&s.client.address, &s.admin, &8_000);
     s.client.remove_token(&s.admin, &asset.address);
     assert_eq!(
         s.client
