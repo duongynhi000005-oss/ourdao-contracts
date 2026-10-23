@@ -278,7 +278,10 @@ fn only_admin_can_unpause_even_when_a_dedicated_pauser_exists() {
 
     // The emergency pauser may stop the DAO but must not be able to resume it.
     assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
-    assert!(s.client.is_paused(), "unauthorised unpause must not change state");
+    assert!(
+        s.client.is_paused(),
+        "unauthorised unpause must not change state"
+    );
 
     // An unrelated address must likewise be rejected without clearing the pause.
     assert_eq!(s.client.try_unpause(&outsider), Err(Ok(Error::NotAdmin)));
@@ -747,4 +750,121 @@ fn pauser_can_pause_but_cannot_unpause() {
 
     // Revoked pauser can no longer pause
     assert_eq!(s.client.try_pause(&pauser), Err(Ok(Error::NotAdmin)));
+}
+
+// ==================== issue #297: pauser permission tests ====================
+
+#[test]
+fn non_admin_cannot_set_or_revoke_pauser() {
+    let s = setup(2);
+    let member = s.members.get(0).unwrap();
+    let stranger = Address::generate(&s.env);
+    let pauser = Address::generate(&s.env);
+
+    // Member (non-admin) cannot set pauser
+    assert_eq!(
+        s.client.try_set_pauser(&member, &pauser),
+        Err(Ok(Error::NotAdmin))
+    );
+
+    // Stranger cannot set pauser
+    assert_eq!(
+        s.client.try_set_pauser(&stranger, &pauser),
+        Err(Ok(Error::NotAdmin))
+    );
+
+    // Admin sets pauser successfully
+    s.client.set_pauser(&s.admin, &pauser);
+
+    // Member (non-admin) cannot revoke pauser
+    assert_eq!(
+        s.client.try_revoke_pauser(&member),
+        Err(Ok(Error::NotAdmin))
+    );
+
+    // Stranger cannot revoke pauser
+    assert_eq!(
+        s.client.try_revoke_pauser(&stranger),
+        Err(Ok(Error::NotAdmin))
+    );
+
+    // Only admin can revoke
+    assert!(s.client.try_revoke_pauser(&s.admin).is_ok());
+}
+
+#[test]
+fn pauser_lifecycle_state_and_permission_invariants() {
+    let s = setup(1);
+    let pauser = Address::generate(&s.env);
+
+    // 1. Setting pauser works
+    s.client.set_pauser(&s.admin, &pauser);
+
+    // 2. Setting the same pauser again returns PauserAlreadySet
+    assert_eq!(
+        s.client.try_set_pauser(&s.admin, &pauser),
+        Err(Ok(Error::AlreadyPauser))
+    );
+
+    // 3. Pauser is strictly forbidden from executing administrative mutations
+    assert_eq!(
+        s.client.try_set_consensus_threshold(&pauser, &6_000u32),
+        Err(Ok(Error::NotAdmin))
+    );
+    assert_eq!(
+        s.client.try_add_admin(&pauser, &Address::generate(&s.env)),
+        Err(Ok(Error::NotAdmin))
+    );
+    assert_eq!(
+        s.client.try_propose_policy_update(&pauser, &policy()),
+        Err(Ok(Error::NotAdmin))
+    );
+    assert_eq!(
+        s.client
+            .try_propose_token_addition(&pauser, &Address::generate(&s.env)),
+        Err(Ok(Error::NotAdmin))
+    );
+
+    // 4. Pauser can pause
+    s.client.pause(&pauser);
+    assert!(s.client.is_paused());
+
+    // 5. Pauser cannot unpause
+    assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
+
+    // Admin unpauses
+    s.client.unpause(&s.admin);
+    assert!(!s.client.is_paused());
+
+    // 6. Revoke pauser
+    s.client.revoke_pauser(&s.admin);
+
+    // 7. Revoking again when no pauser is set returns NoPauserSet
+    assert_eq!(
+        s.client.try_revoke_pauser(&s.admin),
+        Err(Ok(Error::NotPauser))
+    );
+
+    // 8. Revoked pauser can no longer pause
+    assert_eq!(s.client.try_pause(&pauser), Err(Ok(Error::NotAdmin)));
+}
+
+#[test]
+fn set_and_revoke_pauser_emits_expected_events() {
+    let s = setup(0);
+    let pauser = Address::generate(&s.env);
+
+    s.client.set_pauser(&s.admin, &pauser);
+    // Setting pauser succeeds and state is verified
+    assert_eq!(
+        s.client.try_set_pauser(&s.admin, &pauser),
+        Err(Ok(Error::AlreadyPauser))
+    );
+
+    s.client.revoke_pauser(&s.admin);
+    // Revoking succeeds and clears pauser
+    assert_eq!(
+        s.client.try_revoke_pauser(&s.admin),
+        Err(Ok(Error::NotPauser))
+    );
 }

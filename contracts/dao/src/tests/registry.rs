@@ -116,54 +116,53 @@ fn name_leading_trailing_separator_rejected() {
     let trail = String::from_str(&s.env, "alice-");
     let res = s.client.try_register_name(&owner, &trail);
     assert_eq!(res, Err(Ok(Error::InvalidName)));
-}
 
-// ==================== issue #301: name release on exit ====================
-#[test]
-fn name_freed_after_member_exits_dao() {
-    let s = setup(2);
-    let member = s.members.get(0).unwrap();
-    let other = s.members.get(1).unwrap();
-    let name = String::from_str(&s.env, "alice");
+    // ==================== issue #301: name release on exit ====================
+    #[test]
+    fn name_freed_after_member_exits_dao() {
+        let s = setup(2);
+        let member = s.members.get(0).unwrap();
+        let other = s.members.get(1).unwrap();
+        let name = String::from_str(&s.env, "alice");
 
-    // Member registers a name.
-    s.client.register_name(&member, &name);
-    assert_eq!(s.client.name_of(&member), Some(name.clone()));
-    assert_eq!(s.client.resolve_name(&name), Some(member.clone()));
+        // Member registers a name.
+        s.client.register_name(&member, &name);
+        assert_eq!(s.client.name_of(&member), Some(name.clone()));
+        assert_eq!(s.client.resolve_name(&name), Some(member.clone()));
 
-    // When member exits, their name should be freed.
-    s.client.exit_dao(&member);
-    assert_eq!(s.client.name_of(&member), None);
-    assert_eq!(s.client.resolve_name(&name), None);
+        // When member exits, their name should be freed.
+        s.client.exit_dao(&member);
+        assert_eq!(s.client.name_of(&member), None);
+        assert_eq!(s.client.resolve_name(&name), None);
 
-    // Now the name can be claimed by another active member.
-    let res = s.client.try_register_name(&other, &name);
-    assert!(res.is_ok());
-    assert_eq!(s.client.name_of(&other), Some(name.clone()));
-    assert_eq!(s.client.resolve_name(&name), Some(other.clone()));
-}
+        // Now the name can be claimed by another active member.
+        let res = s.client.try_register_name(&other, &name);
+        assert!(res.is_ok());
+        assert_eq!(s.client.name_of(&other), Some(name.clone()));
+        assert_eq!(s.client.resolve_name(&name), Some(other.clone()));
+    }
 
-#[test]
-fn name_can_be_reregistered_after_exit_and_rejoin() {
-    let s = setup(1);
-    let member = s.members.get(0).unwrap();
-    let name = String::from_str(&s.env, "alice");
+    #[test]
+    fn name_can_be_reregistered_after_exit_and_rejoin() {
+        let s = setup(1);
+        let member = s.members.get(0).unwrap();
+        let name = String::from_str(&s.env, "alice");
 
-    // Register a name.
-    s.client.register_name(&member, &name);
-    assert_eq!(s.client.name_of(&member), Some(name.clone()));
+        // Register a name.
+        s.client.register_name(&member, &name);
+        assert_eq!(s.client.name_of(&member), Some(name.clone()));
 
-    // Exit and rejoin.
-    s.client.exit_dao(&member);
-    assert_eq!(s.client.name_of(&member), None);
+        // Exit and rejoin.
+        s.client.exit_dao(&member);
+        assert_eq!(s.client.name_of(&member), None);
 
-    s.client.register_member(&member);
-    assert!(s.client.is_member(&member));
+        s.client.register_member(&member);
+        assert!(s.client.is_member(&member));
 
-    // Member can re-register the same name after rejoining.
-    s.client.register_name(&member, &name);
-    assert_eq!(s.client.name_of(&member), Some(name));
-}
+        // Member can re-register the same name after rejoining.
+        s.client.register_name(&member, &name);
+        assert_eq!(s.client.name_of(&member), Some(name));
+    }
 
     let lead2 = String::from_str(&s.env, "_alice");
     let res = s.client.try_register_name(&owner, &lead2);
