@@ -622,3 +622,58 @@ fn unstaking_during_unrevealed_private_commitment_is_rejected() {
         Err(Ok(Error::HasActiveLoan))
     );
 }
+
+// ==================== #280: base token isolation ====================
+#[test]
+fn staking_and_unstaking_only_transfers_base_token_ignoring_whitelisted_assets() {
+    let s = setup(1);
+    let member = s.members.get(0).unwrap();
+    let base_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address);
+
+    let issuer = Address::generate(&s.env);
+    let extra_sac = s.env.register_stellar_asset_contract_v2(issuer);
+    let extra_token = soroban_sdk::token::Client::new(&s.env, &extra_sac.address());
+    let extra_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &extra_sac.address());
+
+    s.client
+        .propose_token_addition(&s.admin, &extra_sac.address());
+    advance(&s.env, crate::admin::TIMELOCK_DURATION);
+    s.client
+        .execute_token_addition(&s.admin, &extra_sac.address());
+    assert!(s.client.is_token_whitelisted(&extra_sac.address()));
+
+    base_mint.mint(&member, &50_000);
+    extra_mint.mint(&member, &50_000);
+
+    let stake_amount = 20_000;
+    let member_base_before = s.token.balance(&member);
+    let member_extra_before = extra_token.balance(&member);
+    let contract_base_before = s.token.balance(&s.client.address);
+    let contract_extra_before = extra_token.balance(&s.client.address);
+
+    s.client.stake(&member, &stake_amount);
+
+    // Staking strictly uses base token
+    assert_eq!(s.token.balance(&member), member_base_before - stake_amount);
+    assert_eq!(
+        s.token.balance(&s.client.address),
+        contract_base_before + stake_amount
+    );
+    assert_eq!(extra_token.balance(&member), member_extra_before);
+    assert_eq!(
+        extra_token.balance(&s.client.address),
+        contract_extra_before
+    );
+    assert_eq!(extra_token.balance(&s.client.address), 0);
+
+    // Unstaking also strictly returns base token
+    s.client.unstake(&member, &stake_amount);
+
+    assert_eq!(s.token.balance(&member), member_base_before);
+    assert_eq!(s.token.balance(&s.client.address), contract_base_before);
+    assert_eq!(extra_token.balance(&member), member_extra_before);
+    assert_eq!(
+        extra_token.balance(&s.client.address),
+        contract_extra_before
+    );
+}

@@ -550,3 +550,48 @@ fn delegate_vote_unilateral_succeeds_without_delegatee_auth() {
     s.client.delegate_vote(&delegator, &delegatee);
     assert_eq!(s.client.get_delegate(&delegator), Some(delegatee.clone()));
 }
+
+// ==================== #280: base token isolation ====================
+#[test]
+fn register_member_only_transfers_base_token_ignoring_whitelisted_assets() {
+    let s = setup(1);
+    let base_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address);
+
+    let issuer = Address::generate(&s.env);
+    let extra_sac = s.env.register_stellar_asset_contract_v2(issuer);
+    let extra_token = soroban_sdk::token::Client::new(&s.env, &extra_sac.address());
+    let extra_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &extra_sac.address());
+
+    s.client
+        .propose_token_addition(&s.admin, &extra_sac.address());
+    advance(&s.env, crate::admin::TIMELOCK_DURATION);
+    s.client
+        .execute_token_addition(&s.admin, &extra_sac.address());
+    assert!(s.client.is_token_whitelisted(&extra_sac.address()));
+
+    let applicant = Address::generate(&s.env);
+    base_mint.mint(&applicant, &10_000);
+    extra_mint.mint(&applicant, &10_000);
+
+    let applicant_base_before = s.token.balance(&applicant);
+    let applicant_extra_before = extra_token.balance(&applicant);
+    let contract_base_before = s.token.balance(&s.client.address);
+    let contract_extra_before = extra_token.balance(&s.client.address);
+
+    s.client.register_member(&applicant);
+
+    // Only the base token balance changed: fee was deducted from applicant and credited to contract.
+    assert_eq!(s.token.balance(&applicant), applicant_base_before - FEE);
+    assert_eq!(
+        s.token.balance(&s.client.address),
+        contract_base_before + FEE
+    );
+
+    // The whitelisted non-base asset was completely untouched.
+    assert_eq!(extra_token.balance(&applicant), applicant_extra_before);
+    assert_eq!(
+        extra_token.balance(&s.client.address),
+        contract_extra_before
+    );
+    assert_eq!(extra_token.balance(&s.client.address), 0);
+}

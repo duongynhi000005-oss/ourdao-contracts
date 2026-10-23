@@ -18,6 +18,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `docs/events.schema.json`: machine-readable event schema covering all contract event topics (#344).
 - `treasury::tally` and `loans::vote_on_loan_proposal` read the active-member count (and policy/threshold) once per call (#355).
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).
+- Regression test coverage ensuring membership fee and staking/unstaking strictly use the base token and ignore other whitelisted assets (#280).
 
 ### Fixed
 - Audit all eight DAO token-transfer call sites and align state effects before external token interactions (#317).
