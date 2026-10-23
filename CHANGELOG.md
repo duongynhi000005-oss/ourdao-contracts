@@ -22,6 +22,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).
 
 ### Fixed
+- Use the loan asset balance in `calculate_loan_terms_in_asset` and enforce `max_loan_to_treasury_ratio` against the asset treasury balance in `request_loan_in_asset` and `edit_loan_proposal` (#277).
 - Audit all eight DAO token-transfer call sites and align state effects before external token interactions (#317).
 - Enforce and regression-test admin-only `unpause`: the dedicated pauser may pause but cannot resume the DAO (#319).
 - Fixed `vote_batch` to authenticate the voter once for the batch instead of re-authorizing per proposal vote, preventing auth collisions (#308).

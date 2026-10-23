@@ -1485,3 +1485,76 @@ fn loan_repayment_error_parity_across_entrypoints() {
         Err(Ok(Error::NotBorrower))
     );
 }
+
+// ==================== issue #277: asset balance in interest curve and treasury ratio ====================
+
+#[test]
+fn loan_ratio_uses_asset_balance_not_base_balance() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+
+    // Whitelist second asset with funding = 500 (small balance relative to base treasury = 3,000).
+    // Policy max_loan_to_treasury_ratio is 5,000 bps (50%).
+    // 50% of 500 = 250 max loan in second asset.
+    let second_asset = whitelist_second_asset(&s, 500);
+
+    // Requesting 300 in second asset exceeds 50% of second asset treasury (250),
+    // even though it is well below 50% of base token treasury (1,500).
+    let res = s
+        .client
+        .try_request_loan_in_asset(&borrower, &300, &second_asset.address, &None);
+    assert_eq!(res, Err(Ok(Error::ExceedsTreasuryRatio)));
+
+    // Requesting exactly 250 in second asset is permitted.
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &250, &second_asset.address, &None);
+    let prop = s.client.get_loan_proposal(&pid).unwrap();
+    assert_eq!(prop.amount, 250);
+}
+
+#[test]
+fn edit_loan_proposal_enforces_asset_treasury_ratio() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+
+    // Whitelist second asset with 500 funding (50% max = 250)
+    let second_asset = whitelist_second_asset(&s, 500);
+
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &200, &second_asset.address, &None);
+
+    // Editing to 300 (> 250) must be rejected with ExceedsTreasuryRatio
+    let res_over = s.client.try_edit_loan_proposal(&borrower, &pid, &300);
+    assert_eq!(res_over, Err(Ok(Error::ExceedsTreasuryRatio)));
+
+    // Editing to 250 (<= 250) must succeed
+    let res_ok = s.client.try_edit_loan_proposal(&borrower, &pid, &250);
+    assert!(res_ok.is_ok());
+    let prop = s.client.get_loan_proposal(&pid).unwrap();
+    assert_eq!(prop.amount, 250);
+}
+
+#[test]
+fn calculate_loan_terms_in_asset_prices_against_asset_treasury() {
+    let s = setup(3);
+    // Base treasury is 3,000
+    let second_asset = whitelist_second_asset(&s, 500);
+
+    // 100 in base token (100 / 3000 ~ 3.33% of treasury)
+    let base_terms = s.client.calculate_loan_terms(&100);
+
+    // 100 in second asset (100 / 500 = 20% of treasury)
+    let second_terms = s
+        .client
+        .calculate_loan_terms_in_asset(&100, &second_asset.address);
+
+    assert!(second_terms.interest_rate > base_terms.interest_rate);
+    assert!(second_terms.total_repayment > base_terms.total_repayment);
+
+    // Unwhitelisted asset fails
+    let unknown = Address::generate(&s.env);
+    let res_unknown = s.client.try_calculate_loan_terms_in_asset(&100, &unknown);
+    assert_eq!(res_unknown, Err(Ok(Error::TokenNotWhitelisted)));
+}

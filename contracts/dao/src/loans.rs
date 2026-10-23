@@ -14,6 +14,20 @@ pub fn calculate_loan_terms(env: &Env, amount: i128) -> LoanTerms {
     quote_terms(env, amount, util::treasury_balance(env))
 }
 
+/// Quote the terms a loan of `amount` in `asset` would carry right now.
+pub fn calculate_loan_terms_in_asset(
+    env: &Env,
+    amount: i128,
+    asset: Address,
+) -> Result<LoanTerms, Error> {
+    util::require_initialized(env)?;
+    if !storage::is_token_whitelisted(env, &asset) {
+        return Err(Error::TokenNotWhitelisted);
+    }
+    let treasury = util::treasury_balance_in_asset(env, &asset);
+    Ok(quote_terms(env, amount, treasury))
+}
+
 /// [`calculate_loan_terms`] against an explicit treasury balance, so loans in
 /// a non-base asset are priced against the treasury held in that asset.
 fn quote_terms(env: &Env, amount: i128, treasury: i128) -> LoanTerms {
@@ -200,11 +214,16 @@ pub fn edit_loan_proposal(
     let prev_amount = proposal.amount;
     let prev_total_repayment = proposal.total_repayment;
     let asset = storage::get_loan_asset(env, proposal_id);
-    let terms = quote_terms(
-        env,
-        new_amount,
-        util::treasury_balance_in_asset(env, &asset),
-    );
+    let policy = storage::get_policy(env);
+    let treasury = util::treasury_balance_in_asset(env, &asset);
+    let max_loan = treasury
+        .checked_mul(policy.max_loan_to_treasury_ratio as i128)
+        .and_then(|v| v.checked_div(BASIS_POINTS))
+        .unwrap_or(0);
+    if new_amount > max_loan {
+        return Err(Error::ExceedsTreasuryRatio);
+    }
+    let terms = quote_terms(env, new_amount, treasury);
     proposal.amount = new_amount;
     proposal.interest_rate = terms.interest_rate;
     proposal.duration = terms.duration;

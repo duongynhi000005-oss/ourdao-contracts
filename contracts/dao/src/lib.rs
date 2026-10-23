@@ -606,6 +606,14 @@ impl OurDao {
         Ok(loans::calculate_loan_terms(&env, amount))
     }
 
+    pub fn calculate_loan_terms_in_asset(
+        env: Env,
+        amount: i128,
+        asset: Address,
+    ) -> Result<LoanTerms, Error> {
+        loans::calculate_loan_terms_in_asset(&env, amount, asset)
+    }
+
     pub fn calculate_exit_share(env: Env, member: Address) -> Result<i128, Error> {
         util::require_initialized(&env)?;
         Ok(membership::calculate_exit_share(&env, &member))
