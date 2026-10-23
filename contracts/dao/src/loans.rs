@@ -28,6 +28,35 @@ pub fn calculate_loan_terms_in_asset(
     Ok(quote_terms(env, amount, treasury))
 }
 
+/// Returns the decimal precision for a token contract, querying the SEP-41
+/// `decimals` entrypoint via `token::Client`.
+#[allow(dead_code)]
+pub fn get_asset_decimals(env: &Env, asset: &Address) -> u32 {
+    util::token_client_for(env, asset).decimals()
+}
+
+/// Normalizes an integer `amount` from `from_decimals` to `to_decimals`.
+/// Returns `None` on arithmetic overflow.
+#[allow(dead_code)]
+pub fn normalize_decimal_amount(
+    amount: i128,
+    from_decimals: u32,
+    to_decimals: u32,
+) -> Option<i128> {
+    if from_decimals == to_decimals {
+        return Some(amount);
+    }
+    if to_decimals > from_decimals {
+        let diff = to_decimals - from_decimals;
+        let factor = 10i128.checked_pow(diff)?;
+        amount.checked_mul(factor)
+    } else {
+        let diff = from_decimals - to_decimals;
+        let factor = 10i128.checked_pow(diff)?;
+        Some(amount / factor)
+    }
+}
+
 /// [`calculate_loan_terms`] against an explicit treasury balance, so loans in
 /// a non-base asset are priced against the treasury held in that asset.
 fn quote_terms(env: &Env, amount: i128, treasury: i128) -> LoanTerms {

@@ -15,6 +15,7 @@ record to the index below. Keep the status (`Proposed`, `Accepted`,
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](./0001-immutable-contract-vs-upgradeable.md) | Immutable contract vs upgradeable contract | Accepted |
+| [0003](./0003-asset-decimals.md) | Decimal-Aware Loan Policy and Asset Normalization | Accepted |
 | [0004](./0004-loan-extension.md) | Loan due-date extension proposals | Proposed |
 | [0005](./0005-reputation-rate.md) | Interest discount from member loan history | Proposed |
 | [0008](./0008-early-repayment.md) | Early repayment discount | Proposed |

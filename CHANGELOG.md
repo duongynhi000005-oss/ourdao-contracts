@@ -13,6 +13,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- ADR-0003: Dynamic decimal awareness and scale-invariant ratio normalization across assets of differing decimal precision (e.g. 6-decimal USDC vs 7-decimal base and 18-decimal tokens), ensuring identical loan ratios, identical interest rates, and consistent treasury exposure checks for equivalent real-value loans (#276).
 - Equivalence test suites proving single-token entrypoints (`request_loan`, `repay_loan`, `propose_treasury_withdrawal`) produce identical state transitions, values, and events as their multi-token `*_in_asset(base)` counterparts (#285).
 - `scripts/deploy-testnet.sh` deploys a second test asset (`OURTESTB`) on testnet and proposes it for the treasury whitelist; `DEPLOYMENTS.md` tracks it (#342).
 - `get_member_overview(member)` view returning the member record, stake, pending yield, loan stats, registered name and delegate in one call (#340).

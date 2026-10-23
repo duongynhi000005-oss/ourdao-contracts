@@ -2,7 +2,6 @@ use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::xdr::{ContractEventBody, ScVal};
 use soroban_sdk::{token, Address, Env, Vec};
 
-use crate::error::Error;
 use crate::types::LoanPolicy;
 use crate::{OurDao, OurDaoClient};
 
@@ -174,36 +173,109 @@ pub fn advance(env: &Env, secs: u64) {
     env.ledger().with_mut(|li| li.timestamp += secs);
 }
 
-// Mock token builders with different decimals
-
-pub fn create_token_with_decimals(env: &Env, decimals: u32) -> token::Client<'_> {
-    let issuer = Address::generate(env);
-    let sac = env.register_stellar_asset_contract_v2(issuer);
-    let token_id = sac.address();
-    let client = token::Client::new(env, &token_id);
-
-    // Set decimals through metadata
-    env.storage()
-        .instance()
-        .set(&("decimals", &token_id), &decimals);
-
-    client
+#[soroban_sdk::contracttype]
+#[derive(Clone)]
+pub enum DecimalTokenKey {
+    Decimals,
+    Balance(Address),
 }
 
+#[soroban_sdk::contract]
+pub struct DecimalToken;
+
+#[soroban_sdk::contractimpl]
+impl DecimalToken {
+    pub fn set_decimals(env: Env, decimals: u32) {
+        env.storage()
+            .instance()
+            .set(&DecimalTokenKey::Decimals, &decimals);
+    }
+
+    pub fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DecimalTokenKey::Decimals)
+            .unwrap_or(7)
+    }
+
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let key = DecimalTokenKey::Balance(to);
+        let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage().instance().set(&key, &(current + amount));
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DecimalTokenKey::Balance(id))
+            .unwrap_or(0)
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        if amount < 0 {
+            panic!("negative transfer");
+        }
+        let from_key = DecimalTokenKey::Balance(from);
+        let to_key = DecimalTokenKey::Balance(to);
+        let from_balance: i128 = env.storage().instance().get(&from_key).unwrap_or(0);
+        if from_balance < amount {
+            panic!("insufficient balance");
+        }
+        let to_balance: i128 = env.storage().instance().get(&to_key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&from_key, &(from_balance - amount));
+        env.storage()
+            .instance()
+            .set(&to_key, &(to_balance + amount));
+    }
+}
+
+// Mock token builders with different decimals
+
+#[allow(dead_code)]
+pub fn create_token_with_decimals(env: &Env, decimals: u32) -> token::Client<'_> {
+    let token_id = env.register(DecimalToken, ());
+    let client = DecimalTokenClient::new(env, &token_id);
+    client.set_decimals(&decimals);
+    token::Client::new(env, &token_id)
+}
+
+#[allow(dead_code)]
 pub fn create_token_0_decimals(env: &Env) -> token::Client<'_> {
     create_token_with_decimals(env, 0)
 }
 
+#[allow(dead_code)]
 pub fn create_token_6_decimals(env: &Env) -> token::Client<'_> {
     create_token_with_decimals(env, 6)
 }
 
+#[allow(dead_code)]
 pub fn create_token_7_decimals(env: &Env) -> token::Client<'_> {
     create_token_with_decimals(env, 7)
 }
 
+#[allow(dead_code)]
 pub fn create_token_18_decimals(env: &Env) -> token::Client<'_> {
     create_token_with_decimals(env, 18)
+}
+
+pub fn whitelist_decimal_token<'a>(
+    s: &Setup<'a>,
+    decimals: u32,
+    funding: i128,
+) -> (Address, DecimalTokenClient<'a>, token::Client<'a>) {
+    let token_id = s.env.register(DecimalToken, ());
+    let decimal_client = DecimalTokenClient::new(&s.env, &token_id);
+    decimal_client.set_decimals(&decimals);
+    let token_client = token::Client::new(&s.env, &token_id);
+
+    s.client.propose_token_addition(&s.admin, &token_id);
+    advance(&s.env, crate::admin::TIMELOCK_DURATION);
+    s.client.execute_token_addition(&s.admin, &token_id);
+    decimal_client.mint(&s.client.address, &funding);
+    (token_id, decimal_client, token_client)
 }
 
 // Fluent DAO setup builder

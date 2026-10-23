@@ -1,13 +1,13 @@
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::xdr::{ContractEventBody, ScAddress, ScVal};
+use soroban_sdk::xdr::{ContractEventBody, ScVal};
 use soroban_sdk::{Address, Env, String};
 
 use super::common::*;
 use crate::admin::TIMELOCK_DURATION;
 use crate::storage::ProposalKind;
-use crate::types::{LoanStatus, ProposalPhase, ProposalStatus, ProposalVote};
+use crate::types::{LoanStatus, ProposalPhase, ProposalStatus};
 use crate::Error;
 
 #[test]
@@ -1557,4 +1557,175 @@ fn calculate_loan_terms_in_asset_prices_against_asset_treasury() {
     let unknown = Address::generate(&s.env);
     let res_unknown = s.client.try_calculate_loan_terms_in_asset(&100, &unknown);
     assert_eq!(res_unknown, Err(Ok(Error::TokenNotWhitelisted)));
+}
+
+#[test]
+fn same_real_value_loan_gets_same_ratio_check_in_both_assets() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+
+    // Base asset has 7 decimals (SAC).
+    // Set base treasury to 1,000 units = 10_000_000_000 (3,000 from membership fees + 9_999_997_000 minted)
+    let token_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address);
+    token_mint.mint(&s.client.address, &9_999_997_000);
+    assert_eq!(s.client.get_treasury_balance(), 10_000_000_000);
+
+    // Whitelist a 6-decimal asset (e.g. USDC) with 1,000 units = 1_000_000_000
+    let (token_6, _, _) = whitelist_decimal_token(&s, 6, 1_000_000_000);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&token_6),
+        1_000_000_000
+    );
+
+    // Policy max_loan_to_treasury_ratio is 50% (5,000 bps)
+    // 50% of 1,000 units = 500 units.
+    // In 7 decimals: 500 * 10^7 = 5_000_000_000
+    // In 6 decimals: 500 * 10^6 = 500_000_000
+
+    // Exactly 50% of treasury: BOTH must pass
+    let pid_6 = s
+        .client
+        .request_loan_in_asset(&borrower, &500_000_000, &token_6, &None);
+    assert_eq!(
+        s.client.get_loan_proposal(&pid_6).unwrap().amount,
+        500_000_000
+    );
+
+    let pid_7 = s
+        .client
+        .request_loan_in_asset(&borrower, &5_000_000_000, &s.token.address, &None);
+    assert_eq!(
+        s.client.get_loan_proposal(&pid_7).unwrap().amount,
+        5_000_000_000
+    );
+
+    // 50.1% of treasury (501 units): BOTH must be rejected with ExceedsTreasuryRatio
+    let res_6 = s
+        .client
+        .try_request_loan_in_asset(&borrower, &501_000_000, &token_6, &None);
+    assert_eq!(res_6, Err(Ok(Error::ExceedsTreasuryRatio)));
+
+    let res_7 =
+        s.client
+            .try_request_loan_in_asset(&borrower, &5_010_000_000, &s.token.address, &None);
+    assert_eq!(res_7, Err(Ok(Error::ExceedsTreasuryRatio)));
+}
+
+#[test]
+fn same_real_value_loan_gets_same_interest_rate_across_decimals() {
+    let s = setup(3);
+
+    // Base asset (7 decimals) has 1,000 units
+    let token_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address);
+    token_mint.mint(&s.client.address, &9_999_997_000);
+
+    // Whitelist 6-decimal asset with 1,000 units
+    let (token_6, _, _) = whitelist_decimal_token(&s, 6, 1_000_000_000);
+
+    // Whitelist 18-decimal asset with 1,000 units
+    let factor_18 = 10i128.pow(18);
+    let (token_18, _, _) = whitelist_decimal_token(&s, 18, 1_000 * factor_18);
+
+    // Compare terms for 200 units (20% of treasury):
+    // In 6 decimals: 200 * 10^6 = 200_000_000
+    // In 7 decimals: 200 * 10^7 = 2_000_000_000
+    // In 18 decimals: 200 * 10^18
+    let terms_6 = s
+        .client
+        .calculate_loan_terms_in_asset(&200_000_000, &token_6);
+    let terms_7 = s
+        .client
+        .calculate_loan_terms_in_asset(&2_000_000_000, &s.token.address);
+    let terms_18 = s
+        .client
+        .calculate_loan_terms_in_asset(&(200 * factor_18), &token_18);
+
+    // Rates must be identical because utilization ratio is identical (20%)
+    assert_eq!(terms_6.interest_rate, terms_7.interest_rate);
+    assert_eq!(terms_18.interest_rate, terms_7.interest_rate);
+
+    // Repayment amounts scaled to base decimals (7) must match
+    let scaled_from_6 =
+        crate::loans::normalize_decimal_amount(terms_6.total_repayment, 6, 7).unwrap();
+    assert_eq!(scaled_from_6, terms_7.total_repayment);
+
+    let scaled_from_18 =
+        crate::loans::normalize_decimal_amount(terms_18.total_repayment, 18, 7).unwrap();
+    assert_eq!(scaled_from_18, terms_7.total_repayment);
+}
+
+#[test]
+fn same_real_value_loan_editing_respects_ratio_check_across_decimals() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+
+    let token_mint = soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address);
+    token_mint.mint(&s.client.address, &9_999_997_000);
+
+    let (token_6, _, _) = whitelist_decimal_token(&s, 6, 1_000_000_000);
+
+    // Initial requests well within 50% limit (100 units)
+    let pid_6 = s
+        .client
+        .request_loan_in_asset(&borrower, &100_000_000, &token_6, &None);
+    let pid_7 = s
+        .client
+        .request_loan_in_asset(&borrower, &1_000_000_000, &s.token.address, &None);
+
+    // Edit 6-decimal loan to 501 units (> 50%) fails; edit to 500 units (<= 50%) succeeds
+    let res_6_over = s
+        .client
+        .try_edit_loan_proposal(&borrower, &pid_6, &501_000_000);
+    assert_eq!(res_6_over, Err(Ok(Error::ExceedsTreasuryRatio)));
+    let res_6_ok = s
+        .client
+        .try_edit_loan_proposal(&borrower, &pid_6, &500_000_000);
+    assert!(res_6_ok.is_ok());
+
+    // Edit 7-decimal loan to 501 units (> 50%) fails; edit to 500 units (<= 50%) succeeds
+    let res_7_over = s
+        .client
+        .try_edit_loan_proposal(&borrower, &pid_7, &5_010_000_000);
+    assert_eq!(res_7_over, Err(Ok(Error::ExceedsTreasuryRatio)));
+    let res_7_ok = s
+        .client
+        .try_edit_loan_proposal(&borrower, &pid_7, &5_000_000_000);
+    assert!(res_7_ok.is_ok());
+}
+
+#[test]
+fn decimal_normalization_and_precision_query() {
+    let s = setup(3);
+    let (token_6, _, _) = whitelist_decimal_token(&s, 6, 1_000_000);
+    let (token_18, _, _) = whitelist_decimal_token(&s, 18, 1_000_000);
+
+    assert_eq!(crate::loans::get_asset_decimals(&s.env, &token_6), 6);
+    assert_eq!(crate::loans::get_asset_decimals(&s.env, &token_18), 18);
+
+    // Identity
+    assert_eq!(crate::loans::normalize_decimal_amount(100, 6, 6), Some(100));
+
+    // 6 to 7 decimals (* 10)
+    assert_eq!(
+        crate::loans::normalize_decimal_amount(500_000_000, 6, 7),
+        Some(5_000_000_000)
+    );
+
+    // 7 to 6 decimals (/ 10)
+    assert_eq!(
+        crate::loans::normalize_decimal_amount(5_000_000_000, 7, 6),
+        Some(500_000_000)
+    );
+
+    // 7 to 18 decimals (* 10^11)
+    assert_eq!(
+        crate::loans::normalize_decimal_amount(1_000_000_000, 7, 18),
+        Some(100_000_000_000_000_000_000)
+    );
+
+    // 18 to 7 decimals (/ 10^11)
+    assert_eq!(
+        crate::loans::normalize_decimal_amount(100_000_000_000_000_000_000, 18, 7),
+        Some(1_000_000_000)
+    );
 }
