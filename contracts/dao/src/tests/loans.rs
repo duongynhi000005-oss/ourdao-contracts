@@ -1148,3 +1148,91 @@ fn default_penalty_rounds_up_to_favour_treasury() {
     let expected_penalty = (contribution_before * 2_000 + 10_000 - 1) / 10_000;
     assert_eq!(member.contribution, contribution_before - expected_penalty);
 }
+
+
+// ==================== issue #300: tiny partial repayments ====================
+
+#[test]
+fn test_many_tiny_partial_repayments_sum_exactly_to_total() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan_before = s.client.get_loan(&pid).unwrap();
+    let total = loan_before.total_repayment;
+    assert!(total > 500, "total repayment should include interest");
+
+    let mut repaid_so_far = 0i128;
+    // Repay in small micro-chunks of 13 units, then final chunk with remainder
+    let chunk_size = 13i128;
+
+    while repaid_so_far + chunk_size < total {
+        s.client.repay_loan_partial(&borrower, &pid, &chunk_size);
+        repaid_so_far += chunk_size;
+
+        let cur_loan = s.client.get_loan(&pid).unwrap();
+        assert_eq!(cur_loan.status, LoanStatus::Active);
+        assert_eq!(cur_loan.amount_repaid, repaid_so_far);
+        assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
+    }
+
+    // Final repayment of exact remainder
+    let remainder = total - repaid_so_far;
+    assert!(remainder > 0);
+    s.client.repay_loan_partial(&borrower, &pid, &remainder);
+    repaid_so_far += remainder;
+
+    assert_eq!(repaid_so_far, total);
+
+    // Terminal assertions: loan is fully repaid
+    let final_loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(final_loan.status, LoanStatus::Repaid);
+    assert_eq!(final_loan.amount_repaid, total);
+    assert_eq!(final_loan.amount_repaid, final_loan.total_repayment);
+    assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
+
+    // Any subsequent repayment attempts must fail with LoanNotActive
+    assert_eq!(
+        s.client.try_repay_loan_partial(&borrower, &pid, &1),
+        Err(Ok(Error::LoanNotActive))
+    );
+}
+
+#[test]
+fn test_single_unit_micro_repayments_reach_exact_total() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&borrower, &100, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let total = s.client.get_loan(&pid).unwrap().total_repayment;
+
+    // Repay 1 unit at a time for 20 units
+    for _ in 0..20 {
+        s.client.repay_loan_partial(&borrower, &pid, &1);
+    }
+    let cur = s.client.get_loan(&pid).unwrap();
+    assert_eq!(cur.amount_repaid, 20);
+    assert_eq!(cur.status, LoanStatus::Active);
+
+    // Repay remainder in one go
+    let remainder = total - 20;
+    s.client.repay_loan_partial(&borrower, &pid, &remainder);
+
+    let final_loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(final_loan.status, LoanStatus::Repaid);
+    assert_eq!(final_loan.amount_repaid, total);
+    assert_eq!(final_loan.amount_repaid, final_loan.total_repayment);
+    assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
+}
