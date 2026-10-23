@@ -961,6 +961,67 @@ fn loan_in_second_asset_disburses_and_repays_in_that_asset() {
     assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
 }
 
+// ==================== issue #278: reject repay_loan_in_asset on mismatched asset ====================
+
+#[test]
+fn repay_loan_in_asset_rejects_asset_mismatch_and_preserves_balances() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let asset = whitelist_second_asset(&s, 10_000);
+
+    // 1. Loan issued in second asset
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &2_000, &asset.address, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+
+    let borrower_base_before = s.token.balance(&borrower);
+    let borrower_asset_before = asset.balance(&borrower);
+    let treasury_base_before = s.client.get_treasury_balance();
+    let treasury_asset_before = s.client.get_treasury_balance_in_asset(&asset.address);
+
+    // Repaying a second-asset loan with base token fails with AssetMismatch (#278)
+    let wrong = s
+        .client
+        .try_repay_loan_in_asset(&borrower, &pid, &s.token.address);
+    assert_eq!(wrong, Err(Ok(Error::AssetMismatch)));
+
+    // Verify acceptance criteria: no tokens moved
+    assert_eq!(s.token.balance(&borrower), borrower_base_before);
+    assert_eq!(asset.balance(&borrower), borrower_asset_before);
+    assert_eq!(s.client.get_treasury_balance(), treasury_base_before);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        treasury_asset_before
+    );
+
+    // Loan status and amount_repaid remain unaffected
+    let loan_after = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_after.status, LoanStatus::Active);
+    assert_eq!(loan_after.amount_repaid, 0);
+
+    // 2. Inverse check: Loan issued in base token rejected when repaying with second asset
+    let borrower2 = s.members.get(1).unwrap();
+    let v3 = s.members.get(0).unwrap();
+    let v4 = s.members.get(2).unwrap();
+    let pid_base = s.client.request_loan(&borrower2, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v3, &pid_base, &true);
+    s.client.vote_on_loan_proposal(&v4, &pid_base, &true);
+
+    let res_base = s
+        .client
+        .try_repay_loan_in_asset(&borrower2, &pid_base, &asset.address);
+    assert_eq!(res_base, Err(Ok(Error::AssetMismatch)));
+}
+
 #[test]
 fn loan_in_non_whitelisted_asset_rejected() {
     let s = setup(3);
