@@ -437,6 +437,7 @@ fn approve_and_disburse(env: &Env, proposal: &LoanProposal) -> Result<(), Error>
     borrower.total_loans += 1;
     borrower.active_loans += 1;
     storage::set_member(env, &borrower);
+    storage::inc_active_loans_in_asset(env, &asset);
 
     util::token_client_for(env, &asset).transfer(
         &util::contract_address(env),
@@ -591,6 +592,7 @@ fn repay_loan_internal(
     let remaining = loan.total_repayment - loan.amount_repaid;
     if remaining == 0 {
         loan.status = LoanStatus::Repaid;
+        storage::dec_active_loans_in_asset(env, &asset);
         if let Some(mut member) = storage::get_member(env, &borrower) {
             member.has_active_loan = false;
             member.repaid_loans += 1;
@@ -674,6 +676,8 @@ pub fn mark_loan_defaulted(env: &Env, loan_id: u32) -> Result<(), Error> {
     }
 
     loan.status = LoanStatus::Defaulted;
+    let asset = storage::get_loan_asset(env, loan_id);
+    storage::dec_active_loans_in_asset(env, &asset);
     storage::set_loan(env, &loan);
 
     let mut penalty: i128 = 0;

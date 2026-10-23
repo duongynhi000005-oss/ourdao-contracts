@@ -1016,17 +1016,58 @@ fn loan_in_removed_asset_can_still_be_repaid() {
     s.client.vote_on_loan_proposal(&v2, &pid, &true);
     assert_eq!(asset.balance(&borrower), 2_000);
 
+    // Cannot remove token while an active loan exists in that asset (#273)
+    assert_eq!(
+        s.client.try_remove_token(&s.admin, &asset.address),
+        Err(Ok(Error::TokenHasActiveLoans))
+    );
+    assert!(s.client.is_token_whitelisted(&asset.address));
+
+    // Repay the active loan in full
+    let loan = s.client.get_loan(&pid).unwrap();
+    mint_asset(&s, &asset.address, &borrower, loan.total_repayment);
+    s.client.repay_loan(&borrower, &pid);
+    assert_eq!(s.client.get_loan(&pid).unwrap().status, LoanStatus::Repaid);
+
+    // After repayment, active loan counter reaches 0 so removal succeeds (#273)
     s.client.remove_token(&s.admin, &asset.address);
+    assert!(!s.client.is_token_whitelisted(&asset.address));
     assert_eq!(
         s.client
             .try_request_loan_in_asset(&v1, &100, &asset.address, &None),
         Err(Ok(Error::TokenNotWhitelisted))
     );
+}
 
-    let loan = s.client.get_loan(&pid).unwrap();
-    mint_asset(&s, &asset.address, &borrower, loan.total_repayment);
-    s.client.repay_loan(&borrower, &pid);
-    assert_eq!(s.client.get_loan(&pid).unwrap().status, LoanStatus::Repaid);
+#[test]
+fn remove_token_blocked_by_active_loan_succeeds_after_default() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let asset = whitelist_second_asset(&s, 10_000);
+
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &1_000, &asset.address, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    // Active loan blocks removal
+    assert_eq!(
+        s.client.try_remove_token(&s.admin, &asset.address),
+        Err(Ok(Error::TokenHasActiveLoans))
+    );
+    assert!(s.client.is_token_whitelisted(&asset.address));
+
+    // Advance past due time + default grace period and mark defaulted
+    advance(&s.env, LOAN_DURATION + 1);
+    s.client.mark_loan_defaulted(&pid);
+
+    // After default, counter is decremented to 0; removal succeeds
+    s.client.remove_token(&s.admin, &asset.address);
+    assert!(!s.client.is_token_whitelisted(&asset.address));
 }
 
 // ==================== issue #185: cancel during editing (migrated from test.rs) ====================

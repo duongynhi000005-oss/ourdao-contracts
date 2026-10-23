@@ -322,28 +322,12 @@ pub fn remove_token(env: &Env, caller: Address, token: Address) -> Result<(), Er
     if !storage::is_token_whitelisted(env, &token) {
         return Err(Error::TokenNotWhitelisted);
     }
+    if storage::get_active_loans_in_asset(env, &token) > 0 {
+        return Err(Error::TokenHasActiveLoans);
+    }
     storage::set_token_whitelisted(env, &token, false);
     extend_instance(env);
     env.events()
         .publish((symbol_short!("tok_rem"),), (caller, token));
     Ok(())
-
-/// Try to execute a pending policy update, if the timelock has expired and the
-/// caller is an admin. Returns `TimelockNotExpired` if the timelock has not yet
-/// elapsed, and `NoPendingPolicy` if there is no pending update.
-#[allow(deprecated)]
-pub fn try_execute_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
-    let pending = storage::get_pending_policy_update(env).ok_or(Error::NoPendingPolicy)?;
-    if env.ledger().timestamp() < pending.execution_time {
-        return Err(Error::TimelockNotExpired);
-    }
-    // Clear the pending update before applying it, in case execution fails
-    storage::remove_pending_policy_update(env);
-    storage::set_policy(env, &caller, pending.policy)?;
-    extend_instance(env);
-    env.events().publish((symbol_short!(\"policy\"),), (pending.policy, pending.policy));
-    Ok(())
-}
-
 }

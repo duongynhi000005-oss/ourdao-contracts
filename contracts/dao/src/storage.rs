@@ -78,6 +78,8 @@ pub(crate) enum DataKey {
     /// Asset a loan proposal (and the loan it becomes, which shares its id)
     /// is denominated in. Absent means the base token.
     LoanAsset(u32),
+    /// Number of active loans currently denominated in this asset (#273).
+    ActiveLoansInAsset(Address),
     /// Asset a treasury proposal pays out in. Absent means the base token.
     TreasuryAsset(u32),
     /// Set (to `true`) once by `lock_seeding`; never cleared. Seed entrypoints
@@ -660,5 +662,26 @@ pub fn set_next_treasury_id_at_least(env: &Env, min: u32) {
         .unwrap_or(0);
     if min > current {
         env.storage().instance().set(&DataKey::NextTreasuryId, &min);
+    }
+}
+
+pub fn get_active_loans_in_asset(env: &Env, asset: &Address) -> u32 {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+pub fn inc_active_loans_in_asset(env: &Env, asset: &Address) {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    let current: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &(current + 1));
+    extend_persistent(env, &key);
+}
+
+pub fn dec_active_loans_in_asset(env: &Env, asset: &Address) {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    let current: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    if current > 0 {
+        env.storage().persistent().set(&key, &(current - 1));
+        extend_persistent(env, &key);
     }
 }
