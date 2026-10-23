@@ -371,7 +371,10 @@ fn vote_on_loan_proposal_internal(
             );
         }
     } else if proposal.status == ProposalStatus::Pending {
-        let remaining = active_members.saturating_sub(proposal.votes_cast);
+        // Borrower cannot vote on their own loan proposal (#327), so only
+        // active_members - 1 eligible voters can cast a vote.
+        let eligible_voters = active_members.saturating_sub(1);
+        let remaining = eligible_voters.saturating_sub(proposal.votes_cast);
         let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
         if proposal.for_votes + max_remaining < required {
             proposal.status = ProposalStatus::Rejected;

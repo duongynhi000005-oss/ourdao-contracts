@@ -263,7 +263,6 @@ fn early_rejected_proposal_is_stored_rejected_with_loan_rej() {
     advance(&s.env, EDITING + 1);
     s.client.vote_on_loan_proposal(&v1, &pid, &false);
     s.client.vote_on_loan_proposal(&v2, &pid, &false);
-    s.client.vote_on_loan_proposal(&borrower, &pid, &false);
     assert!(emitted(&s.env, "loan_rej"));
     assert!(!emitted(&s.env, "loan_exp"));
 
@@ -1147,4 +1146,342 @@ fn default_penalty_rounds_up_to_favour_treasury() {
     // Ceil rounding: (contribution_before * 2000 + 10000 - 1) / 10000.
     let expected_penalty = (contribution_before * 2_000 + 10_000 - 1) / 10_000;
     assert_eq!(member.contribution, contribution_before - expected_penalty);
+}
+
+// ==================== issue #285: single-token / multi-token equivalence ====================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoanPath {
+    SingleToken,
+    MultiToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CapturedEventRecord {
+    topic: std::string::String,
+    topics_debug: std::string::String,
+    data_debug: std::string::String,
+}
+
+fn capture_events_by_topic(env: &Env, topic_name: &str) -> std::vec::Vec<CapturedEventRecord> {
+    let all = env.events().all();
+    let mut matching = std::vec::Vec::new();
+    for e in all.events().iter() {
+        let ContractEventBody::V0(body) = &e.body;
+        if let Some(ScVal::Symbol(sym)) = body.topics.first() {
+            if sym.0.to_utf8_string_lossy() == topic_name {
+                matching.push(CapturedEventRecord {
+                    topic: sym.0.to_utf8_string_lossy().into(),
+                    topics_debug: std::format!("{:?}", body.topics),
+                    data_debug: std::format!("{:?}", body.data),
+                });
+            }
+        }
+    }
+    matching
+}
+
+struct LoanRunResult {
+    pid: u32,
+    proposal: crate::types::LoanProposal,
+    req_events: std::vec::Vec<CapturedEventRecord>,
+    loan: crate::types::Loan,
+    borrower_balance_before_repay: i128,
+    borrower_balance_after_repay: i128,
+    treasury_balance_after_repay: i128,
+    repay_events: std::vec::Vec<CapturedEventRecord>,
+    loan_after_repay: crate::types::Loan,
+    borrower_has_active_loan_after: bool,
+    borrower_repaid_loans_after: u32,
+    v1_yield: i128,
+}
+
+fn execute_loan_lifecycle(path: LoanPath, amount: i128, cid_str: Option<&str>) -> LoanRunResult {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let cid = cid_str.map(|cs| String::from_str(&s.env, cs));
+
+    // Drain initial setup events
+    let _ = s.env.events().all();
+
+    let pid = match path {
+        LoanPath::SingleToken => s.client.request_loan(&borrower, &amount, &cid),
+        LoanPath::MultiToken => {
+            s.client
+                .request_loan_in_asset(&borrower, &amount, &s.token.address, &cid)
+        }
+    };
+
+    let req_events = capture_events_by_topic(&s.env, "loan_req");
+    assert_eq!(
+        req_events.len(),
+        1,
+        "exactly 1 loan_req event must be emitted"
+    );
+    assert!(
+        !emitted(&s.env, "loan_asst"),
+        "loan_asst must not be emitted for base token loans"
+    );
+
+    let proposal = s.client.get_loan_proposal(&pid).unwrap();
+
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+
+    let borrower_balance_before_repay = s.token.balance(&borrower);
+
+    // Drain intermediate events before repayment
+    let _ = s.env.events().all();
+
+    match path {
+        LoanPath::SingleToken => s.client.repay_loan(&borrower, &pid),
+        LoanPath::MultiToken => s
+            .client
+            .repay_loan_in_asset(&borrower, &pid, &s.token.address),
+    }
+
+    let repay_events = capture_events_by_topic(&s.env, "loan_rpy");
+    assert_eq!(
+        repay_events.len(),
+        1,
+        "exactly 1 loan_rpy event must be emitted"
+    );
+
+    let borrower_balance_after_repay = s.token.balance(&borrower);
+    let treasury_balance_after_repay = s.client.get_treasury_balance();
+    let loan_after_repay = s.client.get_loan(&pid).unwrap();
+    let member_after = s.client.get_member(&borrower).unwrap();
+    let v1_yield = s.client.get_pending_yield(&v1);
+
+    LoanRunResult {
+        pid,
+        proposal,
+        req_events,
+        loan,
+        borrower_balance_before_repay,
+        borrower_balance_after_repay,
+        treasury_balance_after_repay,
+        repay_events,
+        loan_after_repay,
+        borrower_has_active_loan_after: member_after.has_active_loan,
+        borrower_repaid_loans_after: member_after.repaid_loans,
+        v1_yield,
+    }
+}
+
+#[test]
+fn parametrized_loan_request_and_repayment_parity() {
+    for amount in [100, 500, 1_000] {
+        let res_single = execute_loan_lifecycle(LoanPath::SingleToken, amount, None);
+        let res_multi = execute_loan_lifecycle(LoanPath::MultiToken, amount, None);
+
+        assert_eq!(res_single.pid, res_multi.pid);
+        assert_eq!(res_single.proposal.amount, res_multi.proposal.amount);
+        assert_eq!(
+            res_single.proposal.interest_rate,
+            res_multi.proposal.interest_rate
+        );
+        assert_eq!(res_single.proposal.duration, res_multi.proposal.duration);
+        assert_eq!(
+            res_single.proposal.total_repayment,
+            res_multi.proposal.total_repayment
+        );
+        assert_eq!(res_single.proposal.status, res_multi.proposal.status);
+        assert_eq!(res_single.proposal.phase, res_multi.proposal.phase);
+        assert_eq!(res_single.proposal.for_votes, res_multi.proposal.for_votes);
+        assert_eq!(
+            res_single.proposal.against_votes,
+            res_multi.proposal.against_votes
+        );
+        assert_eq!(
+            res_single.proposal.votes_cast,
+            res_multi.proposal.votes_cast
+        );
+
+        assert_eq!(res_single.req_events, res_multi.req_events);
+
+        assert_eq!(res_single.loan.principal, res_multi.loan.principal);
+        assert_eq!(
+            res_single.loan.total_repayment,
+            res_multi.loan.total_repayment
+        );
+        assert_eq!(res_single.loan.amount_repaid, res_multi.loan.amount_repaid);
+        assert_eq!(res_single.loan.status, res_multi.loan.status);
+
+        assert_eq!(
+            res_single.borrower_balance_before_repay,
+            res_multi.borrower_balance_before_repay
+        );
+        assert_eq!(
+            res_single.borrower_balance_after_repay,
+            res_multi.borrower_balance_after_repay
+        );
+        assert_eq!(
+            res_single.treasury_balance_after_repay,
+            res_multi.treasury_balance_after_repay
+        );
+
+        assert_eq!(res_single.repay_events, res_multi.repay_events);
+
+        assert_eq!(
+            res_single.loan_after_repay.status,
+            res_multi.loan_after_repay.status
+        );
+        assert_eq!(
+            res_single.loan_after_repay.amount_repaid,
+            res_multi.loan_after_repay.amount_repaid
+        );
+        assert_eq!(
+            res_single.borrower_has_active_loan_after,
+            res_multi.borrower_has_active_loan_after
+        );
+        assert_eq!(
+            res_single.borrower_repaid_loans_after,
+            res_multi.borrower_repaid_loans_after
+        );
+        assert_eq!(res_single.v1_yield, res_multi.v1_yield);
+    }
+}
+
+#[test]
+fn loan_request_and_repayment_parity_with_metadata_cid() {
+    let res_single = execute_loan_lifecycle(
+        LoanPath::SingleToken,
+        600,
+        Some("QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"),
+    );
+    let res_multi = execute_loan_lifecycle(
+        LoanPath::MultiToken,
+        600,
+        Some("QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"),
+    );
+
+    assert_eq!(
+        res_single.proposal.metadata_cid,
+        res_multi.proposal.metadata_cid
+    );
+    assert_eq!(res_single.req_events, res_multi.req_events);
+    assert_eq!(res_single.repay_events, res_multi.repay_events);
+    assert_eq!(res_single.loan_after_repay.status, LoanStatus::Repaid);
+    assert_eq!(res_multi.loan_after_repay.status, LoanStatus::Repaid);
+}
+
+#[test]
+fn loan_request_error_parity_across_entrypoints() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let non_member = Address::generate(&s.env);
+    let empty_cid = Some(String::from_str(&s.env, ""));
+    let long_cid = Some(String::from_str(
+        &s.env,
+        "012345678901234567890123456789012345678901234567890123456789012345",
+    ));
+
+    // 1. Zero amount
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &0, &None),
+        s.client
+            .try_request_loan_in_asset(&borrower, &0, &s.token.address, &None)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &0, &None),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // 2. Negative amount
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &-50, &None),
+        s.client
+            .try_request_loan_in_asset(&borrower, &-50, &s.token.address, &None)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &-50, &None),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // 3. Empty metadata CID
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &100, &empty_cid),
+        s.client
+            .try_request_loan_in_asset(&borrower, &100, &s.token.address, &empty_cid)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &100, &empty_cid),
+        Err(Ok(Error::InvalidMetadataCid))
+    );
+
+    // 4. Oversized metadata CID (> 64 bytes)
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &100, &long_cid),
+        s.client
+            .try_request_loan_in_asset(&borrower, &100, &s.token.address, &long_cid)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &100, &long_cid),
+        Err(Ok(Error::DocumentTooLarge))
+    );
+
+    // 5. Non-member borrower
+    assert_eq!(
+        s.client.try_request_loan(&non_member, &100, &None),
+        s.client
+            .try_request_loan_in_asset(&non_member, &100, &s.token.address, &None)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&non_member, &100, &None),
+        Err(Ok(Error::NotMember))
+    );
+
+    // 6. Exceeds max loan-to-treasury ratio (treasury is 3,000, max ratio 50% => 1,500)
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &2_000, &None),
+        s.client
+            .try_request_loan_in_asset(&borrower, &2_000, &s.token.address, &None)
+    );
+    assert_eq!(
+        s.client.try_request_loan(&borrower, &2_000, &None),
+        Err(Ok(Error::ExceedsTreasuryRatio))
+    );
+}
+
+#[test]
+fn loan_repayment_error_parity_across_entrypoints() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let other_member = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    // 1. Non-existent loan id
+    assert_eq!(
+        s.client.try_repay_loan(&borrower, &999),
+        s.client
+            .try_repay_loan_in_asset(&borrower, &999, &s.token.address)
+    );
+    assert_eq!(
+        s.client.try_repay_loan(&borrower, &999),
+        Err(Ok(Error::LoanNotFound))
+    );
+
+    // Create a valid active loan
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&other_member, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    // 2. Caller is not borrower
+    assert_eq!(
+        s.client.try_repay_loan(&other_member, &pid),
+        s.client
+            .try_repay_loan_in_asset(&other_member, &pid, &s.token.address)
+    );
+    assert_eq!(
+        s.client.try_repay_loan(&other_member, &pid),
+        Err(Ok(Error::NotBorrower))
+    );
 }
