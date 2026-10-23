@@ -2,7 +2,7 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, String};
 
 use super::common::*;
-use crate::types::ProposalStatus;
+use crate::types::{LoanStatus, ProposalStatus};
 use crate::Error;
 
 #[test]
@@ -322,4 +322,166 @@ fn propose_treasury_withdrawal_rejects_self_destination() {
         &false,
     );
     assert_eq!(res_asset, Err(Ok(Error::InvalidProposal)));
+}
+
+// ==================== issue #288: get_treasury_accounting reconciliation view ====================
+
+#[test]
+fn treasury_accounting_initial_state_matches_balance_and_staked() {
+    let s = setup(3);
+    let base = s.token.address.clone();
+    let expected_balance = s.client.get_treasury_balance();
+
+    let (token_balance, staked, outstanding_principal) = s.client.get_treasury_accounting(&base);
+
+    assert_eq!(token_balance, expected_balance);
+    assert_eq!(staked, 0);
+    assert_eq!(outstanding_principal, 0);
+
+    // Staking earmarks existing member contribution as stake
+    let member = s.members.get(0).unwrap();
+    s.client.stake(&member, &500);
+
+    let (token_bal_after, staked_after, outstanding_after) =
+        s.client.get_treasury_accounting(&base);
+    assert_eq!(token_bal_after, expected_balance);
+    assert_eq!(staked_after, 500);
+    assert_eq!(outstanding_after, 0);
+    // Spendable treasury decreases by staked amount
+    assert_eq!(token_bal_after - staked_after, expected_balance - 500);
+    assert_eq!(s.client.get_treasury_balance(), expected_balance - 500);
+
+    // Unstaking releases earmarked stake back to spendable treasury
+    s.client.unstake(&member, &500);
+    let (token_bal_final, staked_final, outstanding_final) =
+        s.client.get_treasury_accounting(&base);
+    assert_eq!(token_bal_final, expected_balance);
+    assert_eq!(staked_final, 0);
+    assert_eq!(outstanding_final, 0);
+    assert_eq!(s.client.get_treasury_balance(), expected_balance);
+}
+
+#[test]
+fn treasury_accounting_tracks_loan_lifecycle() {
+    let s = setup(3);
+    let base = s.token.address.clone();
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let initial_balance = s.client.get_treasury_balance();
+    let (bal0, stake0, out0) = s.client.get_treasury_accounting(&base);
+    assert_eq!((bal0, stake0, out0), (initial_balance, 0, 0));
+
+    // 1. Request and disburse loan
+    let pid = s.client.request_loan(&borrower, &1_000, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&0).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+
+    // After disbursement: token balance decreases by principal, outstanding principal increases by principal
+    let (bal1, stake1, out1) = s.client.get_treasury_accounting(&base);
+    assert_eq!(bal1, initial_balance - 1_000);
+    assert_eq!(stake1, 0);
+    assert_eq!(out1, 1_000);
+    // Invariant: actual tokens + outstanding loan principal equals initial treasury assets
+    assert_eq!(bal1 + out1, initial_balance);
+
+    // 2. Partial repayment
+    let interest_total = loan.total_repayment - loan.principal;
+    // Pay interest + 400 principal
+    let partial_payment = interest_total + 400;
+    mint_asset(&s, &base, &borrower, partial_payment);
+    s.client.repay_loan_partial(&borrower, &0, &partial_payment);
+
+    let (bal2, stake2, out2) = s.client.get_treasury_accounting(&base);
+    assert_eq!(out2, 1_000 - 400); // 600 remaining principal
+    assert_eq!(stake2, 0);
+    assert_eq!(bal2, bal1 + partial_payment);
+
+    // 3. Full repayment of remaining balance
+    let remaining = loan.total_repayment - partial_payment;
+    mint_asset(&s, &base, &borrower, remaining);
+    s.client.repay_loan(&borrower, &0);
+
+    let (bal3, stake3, out3) = s.client.get_treasury_accounting(&base);
+    assert_eq!(out3, 0);
+    assert_eq!(stake3, 0);
+    assert_eq!(bal3, initial_balance + interest_total);
+}
+
+#[test]
+fn treasury_accounting_multi_asset_and_default_reconciliation() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    // Whitelist second asset with 5,000 funding
+    let asset = whitelist_second_asset(&s, 5_000);
+
+    let (bal0, stake0, out0) = s.client.get_treasury_accounting(&asset.address);
+    assert_eq!((bal0, stake0, out0), (5_000, 0, 0));
+
+    // Request loan of 2,000 in second asset
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &2_000, &asset.address, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let (bal1, stake1, out1) = s.client.get_treasury_accounting(&asset.address);
+    assert_eq!(bal1, 3_000);
+    assert_eq!(stake1, 0);
+    assert_eq!(out1, 2_000);
+    assert_eq!(bal1 + out1, 5_000);
+
+    // Advance beyond due time + default grace period
+    let loan = s.client.get_loan(&pid).unwrap();
+    let policy = s.client.get_loan_policy();
+    let default_time = loan.due_time + policy.default_grace_period + 1;
+    let now = s.env.ledger().timestamp();
+    if default_time > now {
+        advance(&s.env, default_time - now);
+    }
+
+    // Default the loan
+    s.client.mark_loan_defaulted(&pid);
+
+    // After default, unpaid principal is written off and cleared from outstanding principal
+    let (bal2, stake2, out2) = s.client.get_treasury_accounting(&asset.address);
+    assert_eq!(bal2, 3_000);
+    assert_eq!(stake2, 0);
+    assert_eq!(out2, 0);
+}
+
+#[test]
+fn treasury_accounting_detects_donation_drift() {
+    let s = setup(3);
+    let base = s.token.address.clone();
+    let initial_balance = s.client.get_treasury_balance();
+
+    let (bal0, stake0, out0) = s.client.get_treasury_accounting(&base);
+    assert_eq!((bal0, stake0, out0), (initial_balance, 0, 0));
+
+    // External direct transfer to contract without DAO deposit (direct donation)
+    let donor = Address::generate(&s.env);
+    mint_asset(&s, &base, &donor, 1_500);
+    s.token.transfer(&donor, &s.client.address, &1_500);
+
+    let (bal1, stake1, out1) = s.client.get_treasury_accounting(&base);
+    // Physical token balance reflects the 1,500 donation immediately
+    assert_eq!(bal1, initial_balance + 1_500);
+    assert_eq!(stake1, 0);
+    assert_eq!(out1, 0);
+
+    // Direct donation causes drift between token_balance and previously expected treasury
+    let accounted_equity = s.client.get_treasury_balance();
+    assert_eq!(accounted_equity, initial_balance + 1_500);
+    let drift = bal1 - initial_balance;
+    assert_eq!(drift, 1_500);
 }

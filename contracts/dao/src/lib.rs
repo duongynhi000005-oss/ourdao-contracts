@@ -384,11 +384,6 @@ impl OurDao {
         storage::get_member(&env, &address)
     }
 
-
-    pub fn try_execute_policy_update(env: Env, caller: Address) -> Result<(), Error> {
-        admin::try_execute_policy_update(&env, caller)
-    }
-
     /// Returns `member`'s lifetime loan track record: total loans taken, loans
     /// fully repaid, and loans currently outstanding. Single O(1) storage read;
     /// returns `NotMember` if the address has never registered.
@@ -467,6 +462,19 @@ impl OurDao {
     /// Returns the treasury balance held in a specific whitelisted asset.
     pub fn get_treasury_balance_in_asset(env: Env, asset: Address) -> i128 {
         util::treasury_balance_in_asset(&env, &asset)
+    }
+
+    /// Exposes `(token_balance, staked, outstanding_principal)` per asset (#288)
+    /// so auditors can detect drift or direct donations.
+    pub fn get_treasury_accounting(env: Env, asset: Address) -> (i128, i128, i128) {
+        let token_balance = util::treasury_balance_for(&env, &asset);
+        let staked = if storage::is_initialized(&env) && asset == storage::get_token(&env) {
+            storage::get_total_staked(&env)
+        } else {
+            0
+        };
+        let outstanding_principal = storage::get_outstanding_principal(&env, &asset);
+        (token_balance, staked, outstanding_principal)
     }
 
     pub fn get_total_members(env: Env) -> u32 {

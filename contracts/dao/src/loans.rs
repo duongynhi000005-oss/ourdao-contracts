@@ -430,6 +430,7 @@ fn approve_and_disburse(env: &Env, proposal: &LoanProposal) -> Result<(), Error>
         amount_repaid: 0,
     };
     storage::set_loan(env, &loan);
+    storage::add_outstanding_principal(env, &asset, proposal.amount);
 
     let mut borrower = storage::get_member(env, &proposal.borrower).ok_or(Error::NotMember)?;
     borrower.has_active_loan = true;
@@ -586,7 +587,11 @@ fn repay_loan_internal(
     let interest_before = loan.amount_repaid.min(interest_total);
     loan.amount_repaid += amount;
     let interest_after = loan.amount_repaid.min(interest_total);
-    let interest_component = interest_after - interest_before;
+    let interest_component = (interest_after - interest_before).max(0);
+    let principal_component = (amount - interest_component).max(0);
+    if principal_component > 0 {
+        storage::sub_outstanding_principal(env, &asset, principal_component);
+    }
 
     let remaining = loan.total_repayment - loan.amount_repaid;
     if remaining == 0 {
@@ -675,6 +680,14 @@ pub fn mark_loan_defaulted(env: &Env, loan_id: u32) -> Result<(), Error> {
 
     loan.status = LoanStatus::Defaulted;
     storage::set_loan(env, &loan);
+
+    let asset = storage::get_loan_asset(env, loan_id);
+    let interest_total = (loan.total_repayment - loan.principal).max(0);
+    let principal_repaid = (loan.amount_repaid - interest_total).max(0);
+    let unpaid_principal = (loan.principal - principal_repaid).max(0);
+    if unpaid_principal > 0 {
+        storage::sub_outstanding_principal(env, &asset, unpaid_principal);
+    }
 
     let mut penalty: i128 = 0;
     if let Some(mut member) = storage::get_member(env, &loan.borrower) {

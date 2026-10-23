@@ -80,6 +80,8 @@ pub(crate) enum DataKey {
     LoanAsset(u32),
     /// Asset a treasury proposal pays out in. Absent means the base token.
     TreasuryAsset(u32),
+    /// Running sum of active unpaid principal per asset (#288).
+    OutstandingPrincipal(Address),
     /// Set (to `true`) once by `lock_seeding`; never cleared. Seed entrypoints
     /// reject any call made after this flag is present (#332/#333).
     MigrationSeedingLocked,
@@ -624,6 +626,54 @@ pub fn set_treasury_asset(env: &Env, id: u32, asset: &Address) {
     let key = DataKey::TreasuryAsset(id);
     env.storage().persistent().set(&key, asset);
     extend_persistent(env, &key);
+}
+
+pub fn get_outstanding_principal(env: &Env, asset: &Address) -> i128 {
+    let key = DataKey::OutstandingPrincipal(asset.clone());
+    let res = env.storage().persistent().get(&key).unwrap_or(0);
+    if env.storage().persistent().has(&key) {
+        extend_persistent(env, &key);
+    }
+    res
+}
+
+pub fn add_outstanding_principal(env: &Env, asset: &Address, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+    let current = get_outstanding_principal(env, asset);
+    let updated = current
+        .checked_add(amount)
+        .expect("outstanding principal overflow");
+    let key = DataKey::OutstandingPrincipal(asset.clone());
+    env.storage().persistent().set(&key, &updated);
+    extend_persistent(env, &key);
+}
+
+pub fn sub_outstanding_principal(env: &Env, asset: &Address, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+    let current = get_outstanding_principal(env, asset);
+    let updated = (current - amount).max(0);
+    let key = DataKey::OutstandingPrincipal(asset.clone());
+    if updated == 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &updated);
+        extend_persistent(env, &key);
+    }
+}
+
+#[allow(dead_code)]
+pub fn set_outstanding_principal(env: &Env, asset: &Address, amount: i128) {
+    let key = DataKey::OutstandingPrincipal(asset.clone());
+    if amount <= 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &amount);
+        extend_persistent(env, &key);
+    }
 }
 
 // ---------- migration seeding lock (#332 / #333) ----------
