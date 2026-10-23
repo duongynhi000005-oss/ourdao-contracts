@@ -263,7 +263,6 @@ fn early_rejected_proposal_is_stored_rejected_with_loan_rej() {
     advance(&s.env, EDITING + 1);
     s.client.vote_on_loan_proposal(&v1, &pid, &false);
     s.client.vote_on_loan_proposal(&v2, &pid, &false);
-    s.client.vote_on_loan_proposal(&borrower, &pid, &false);
     assert!(emitted(&s.env, "loan_rej"));
     assert!(!emitted(&s.env, "loan_exp"));
 
@@ -1147,4 +1146,94 @@ fn default_penalty_rounds_up_to_favour_treasury() {
     // Ceil rounding: (contribution_before * 2000 + 10000 - 1) / 10000.
     let expected_penalty = (contribution_before * 2_000 + 10_000 - 1) / 10_000;
     assert_eq!(member.contribution, contribution_before - expected_penalty);
+}
+
+// ==================== issue #283: reject fee-on-transfer tokens ====================
+
+#[test]
+fn repay_loan_with_fee_token_is_rejected() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    // Whitelist FeeToken with 10,000 funding (1% burn on transfer by default)
+    let (fee_asset, fee_token) = whitelist_fee_token(&s, 10_000);
+
+    // Request loan in FeeToken
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &1_000, &fee_asset, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+
+    // Mint funds for borrower to repay
+    fee_token.mint(&borrower, &2_000);
+
+    // Full repayment attempt fails cleanly because contract receives amount - 1% < amount
+    let res = s.client.try_repay_loan(&borrower, &pid);
+    assert_eq!(res, Err(Ok(Error::FeeOnTransferNotSupported)));
+
+    // Partial repayment attempt also fails cleanly
+    let res_partial = s.client.try_repay_loan_partial(&borrower, &pid, &500);
+    assert_eq!(res_partial, Err(Ok(Error::FeeOnTransferNotSupported)));
+
+    // Asset-specific repayment also fails cleanly
+    let res_asset = s
+        .client
+        .try_repay_loan_in_asset(&borrower, &pid, &fee_asset);
+    assert_eq!(res_asset, Err(Ok(Error::FeeOnTransferNotSupported)));
+
+    // Verify invariant: loan state remains unchanged and active
+    let loan_after = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_after.status, LoanStatus::Active);
+    assert_eq!(loan_after.amount_repaid, 0);
+    assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
+
+    // When fee is disabled (0 bps / standard token behavior), repayment succeeds
+    fee_token.set_fee_bps(&0);
+    let res_ok = s.client.try_repay_loan(&borrower, &pid);
+    assert!(res_ok.is_ok());
+
+    let loan_repaid = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_repaid.status, LoanStatus::Repaid);
+    assert_eq!(loan_repaid.amount_repaid, loan.total_repayment);
+    assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
+}
+
+#[test]
+fn repay_base_token_loan_with_fee_token_is_rejected() {
+    // DAO initialized with FeeToken as base token (1% fee enabled)
+    let s = fee_setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+
+    // Mint borrower enough to cover total repayment
+    s.token.mint(&borrower, &1_000);
+
+    // Full repayment attempt fails cleanly
+    let res = s.client.try_repay_loan(&borrower, &pid);
+    assert_eq!(res, Err(Ok(Error::FeeOnTransferNotSupported)));
+
+    // Partial repayment attempt also fails cleanly
+    let res_partial = s.client.try_repay_loan_partial(&borrower, &pid, &200);
+    assert_eq!(res_partial, Err(Ok(Error::FeeOnTransferNotSupported)));
+
+    // State preserved
+    let loan_after = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_after.status, LoanStatus::Active);
+    assert_eq!(loan_after.amount_repaid, 0);
 }

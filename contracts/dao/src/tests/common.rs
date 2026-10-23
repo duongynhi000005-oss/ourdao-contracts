@@ -109,6 +109,131 @@ pub fn rejecting_setup(num_members: u32) -> RejectingSetup<'static> {
     }
 }
 
+// ==================== issue #283: FeeToken mock ====================
+
+#[soroban_sdk::contracttype]
+#[derive(Clone)]
+pub enum FeeTokenKey {
+    Balance(Address),
+    FeeBps,
+}
+
+#[soroban_sdk::contract]
+pub struct FeeToken;
+
+#[soroban_sdk::contractimpl]
+impl FeeToken {
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let key = FeeTokenKey::Balance(to);
+        let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage().instance().set(&key, &(current + amount));
+    }
+
+    pub fn set_fee_bps(env: Env, bps: u32) {
+        env.storage().instance().set(&FeeTokenKey::FeeBps, &bps);
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&FeeTokenKey::Balance(id))
+            .unwrap_or(0)
+    }
+
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        if amount < 0 {
+            panic!("negative transfer");
+        }
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&FeeTokenKey::FeeBps)
+            .unwrap_or(100); // Default 1% (100 bps)
+
+        // 1% burn on transfer: fee = amount * 100 / 10000
+        let fee = (amount * fee_bps as i128) / 10_000;
+        let amount_received = amount - fee;
+
+        let from_key = FeeTokenKey::Balance(from);
+        let to_key = FeeTokenKey::Balance(to);
+        let from_balance: i128 = env.storage().instance().get(&from_key).unwrap_or(0);
+        if from_balance < amount {
+            panic!("insufficient balance");
+        }
+        let to_balance: i128 = env.storage().instance().get(&to_key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&from_key, &(from_balance - amount));
+        env.storage()
+            .instance()
+            .set(&to_key, &(to_balance + amount_received));
+    }
+}
+
+pub struct FeeSetup<'a> {
+    pub env: Env,
+    pub client: OurDaoClient<'a>,
+    pub token: FeeTokenClient<'a>,
+    pub token_id: Address,
+    pub admin: Address,
+    pub members: Vec<Address>,
+}
+
+pub fn fee_setup(num_members: u32) -> FeeSetup<'static> {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(FeeToken, ());
+    let token = FeeTokenClient::new(&env, &token_id);
+
+    // Disable fee during registration so initial member fees transfer intact
+    token.set_fee_bps(&0);
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(OurDao, ());
+    let client = OurDaoClient::new(&env, &contract_id);
+
+    let mut admins = Vec::new(&env);
+    admins.push_back(admin.clone());
+    client.initialize(&admins, &5_100u32, &FEE, &token_id, &policy());
+
+    let mut members = Vec::new(&env);
+    for _ in 0..num_members {
+        let m = Address::generate(&env);
+        token.mint(&m, &MINT);
+        client.register_member(&m);
+        members.push_back(m);
+    }
+
+    // Now re-enable 1% fee-on-transfer (100 bps)
+    token.set_fee_bps(&100);
+
+    FeeSetup {
+        env,
+        client,
+        token,
+        token_id,
+        admin,
+        members,
+    }
+}
+
+/// Registers a FeeToken mock (burns 1% on transfer), whitelists it,
+/// and funds the DAO treasury with `funding` tokens (#283).
+pub fn whitelist_fee_token<'a>(s: &Setup<'a>, funding: i128) -> (Address, FeeTokenClient<'a>) {
+    let fee_token_id = s.env.register(FeeToken, ());
+    let fee_token = FeeTokenClient::new(&s.env, &fee_token_id);
+    s.client.propose_token_addition(&s.admin, &fee_token_id);
+    advance(&s.env, crate::admin::TIMELOCK_DURATION);
+    s.client.execute_token_addition(&s.admin, &fee_token_id);
+    fee_token.mint(&s.client.address, &funding);
+    (fee_token_id, fee_token)
+}
+
 pub struct Setup<'a> {
     pub env: Env,
     pub client: OurDaoClient<'a>,
@@ -183,7 +308,9 @@ pub fn create_token_with_decimals(env: &Env, decimals: u32) -> token::Client<'_>
     let client = token::Client::new(env, &token_id);
 
     // Set decimals through metadata
-    env.storage().instance().set(&("decimals", &token_id), &decimals);
+    env.storage()
+        .instance()
+        .set(&("decimals", &token_id), &decimals);
 
     client
 }

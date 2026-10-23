@@ -371,7 +371,10 @@ fn vote_on_loan_proposal_internal(
             );
         }
     } else if proposal.status == ProposalStatus::Pending {
-        let remaining = active_members.saturating_sub(proposal.votes_cast);
+        // Borrower cannot vote on their own loan proposal (#327), so only
+        // active_members - 1 eligible voters can cast a vote.
+        let eligible_voters = active_members.saturating_sub(1);
+        let remaining = eligible_voters.saturating_sub(proposal.votes_cast);
         let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
         if proposal.for_votes + max_remaining < required {
             proposal.status = ProposalStatus::Rejected;
@@ -606,7 +609,15 @@ fn repay_loan_internal(
         distribute_interest(env, interest_component, &asset);
     }
     // External token interaction last; failed transfers revert all accounting effects.
-    util::token_client_for(env, &asset).transfer(&borrower, util::contract_address(env), &amount);
+    // Issue #283: detect fee-on-transfer tokens by measuring contract balance delta.
+    let client = util::token_client_for(env, &asset);
+    let contract = util::contract_address(env);
+    let balance_before = client.balance(&contract);
+    client.transfer(&borrower, &contract, &amount);
+    let balance_after = client.balance(&contract);
+    if balance_after.saturating_sub(balance_before) < amount {
+        return Err(Error::FeeOnTransferNotSupported);
+    }
 
     env.events().publish(
         (symbol_short!("loan_rpy"),),
