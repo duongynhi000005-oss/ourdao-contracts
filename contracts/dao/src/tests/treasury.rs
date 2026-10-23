@@ -1,5 +1,5 @@
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, String};
+use soroban_sdk::{Address, Map, String};
 
 use super::common::*;
 use crate::types::ProposalStatus;
@@ -322,4 +322,90 @@ fn propose_treasury_withdrawal_rejects_self_destination() {
         &false,
     );
     assert_eq!(res_asset, Err(Ok(Error::InvalidProposal)));
+}
+
+// ==================== issue #281: get_treasury_balances view ====================
+
+#[test]
+fn get_treasury_balances_initial_base_token_only() {
+    let s = setup(3);
+    let base = s.token.address.clone();
+    let expected_base_balance = s.client.get_treasury_balance();
+
+    let balances: Map<Address, i128> = s.client.get_treasury_balances();
+    assert_eq!(balances.len(), 1);
+    assert_eq!(balances.get(base), Some(expected_base_balance));
+}
+
+#[test]
+fn get_treasury_balances_returns_all_assets_and_tracks_disbursements() {
+    let s = setup(3);
+    let base = s.token.address.clone();
+    let proposer = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let dest = Address::generate(&s.env);
+
+    // 1. Initial state: base token only
+    let base_initial = s.client.get_treasury_balance();
+    let initial_map = s.client.get_treasury_balances();
+    assert_eq!(initial_map.len(), 1);
+    assert_eq!(initial_map.get(base.clone()), Some(base_initial));
+
+    // 2. Whitelist second asset (asset_b) with 5,000 funding
+    let asset_b = whitelist_second_asset(&s, 5_000);
+    // 3. Whitelist third asset (asset_c) with 2,500 funding
+    let asset_c = whitelist_second_asset(&s, 2_500);
+
+    let multi_map = s.client.get_treasury_balances();
+    assert_eq!(multi_map.len(), 3);
+    assert_eq!(multi_map.get(base.clone()), Some(base_initial));
+    assert_eq!(multi_map.get(asset_b.address.clone()), Some(5_000));
+    assert_eq!(multi_map.get(asset_c.address.clone()), Some(2_500));
+
+    // Verify consistency with individual views
+    assert_eq!(
+        multi_map.get(base.clone()),
+        Some(s.client.get_treasury_balance())
+    );
+    assert_eq!(
+        multi_map.get(asset_b.address.clone()),
+        Some(s.client.get_treasury_balance_in_asset(&asset_b.address))
+    );
+    assert_eq!(
+        multi_map.get(asset_c.address.clone()),
+        Some(s.client.get_treasury_balance_in_asset(&asset_c.address))
+    );
+
+    // 4. Disburse 3,000 from asset_b
+    let reason = String::from_str(&s.env, "grant");
+    let pid_b = s.client.propose_withdrawal_in_asset(
+        &proposer,
+        &3_000,
+        &asset_b.address,
+        &dest,
+        &reason,
+        &false,
+    );
+    s.client.vote_on_treasury_proposal(&v1, &pid_b, &true);
+    s.client.vote_on_treasury_proposal(&v2, &pid_b, &true);
+
+    let after_b_map = s.client.get_treasury_balances();
+    assert_eq!(after_b_map.len(), 3);
+    assert_eq!(after_b_map.get(base.clone()), Some(base_initial));
+    assert_eq!(after_b_map.get(asset_b.address.clone()), Some(2_000));
+    assert_eq!(after_b_map.get(asset_c.address.clone()), Some(2_500));
+
+    // 5. Disburse 500 from base token
+    let pid_base = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &500, &dest, &reason, &false);
+    s.client.vote_on_treasury_proposal(&v1, &pid_base, &true);
+    s.client.vote_on_treasury_proposal(&v2, &pid_base, &true);
+
+    let final_map = s.client.get_treasury_balances();
+    assert_eq!(final_map.len(), 3);
+    assert_eq!(final_map.get(base.clone()), Some(base_initial - 500));
+    assert_eq!(final_map.get(asset_b.address.clone()), Some(2_000));
+    assert_eq!(final_map.get(asset_c.address.clone()), Some(2_500));
 }

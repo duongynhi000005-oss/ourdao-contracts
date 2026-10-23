@@ -30,7 +30,7 @@ mod tests;
 #[cfg(all(test, feature = "bench-budget"))]
 mod bench;
 
-use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, Map, String, Vec};
 use types::{
     AssetBalance, DaoSummary, SeedDocEntry, SeedNameEntry, SeedStakeEntry, SeedYieldEntry,
 };
@@ -384,11 +384,6 @@ impl OurDao {
         storage::get_member(&env, &address)
     }
 
-
-    pub fn try_execute_policy_update(env: Env, caller: Address) -> Result<(), Error> {
-        admin::try_execute_policy_update(&env, caller)
-    }
-
     /// Returns `member`'s lifetime loan track record: total loans taken, loans
     /// fully repaid, and loans currently outstanding. Single O(1) storage read;
     /// returns `NotMember` if the address has never registered.
@@ -467,6 +462,16 @@ impl OurDao {
     /// Returns the treasury balance held in a specific whitelisted asset.
     pub fn get_treasury_balance_in_asset(env: Env, asset: Address) -> i128 {
         util::treasury_balance_in_asset(&env, &asset)
+    }
+
+    /// Returns spendable treasury balances across all assets (base token + whitelisted tokens) (#281).
+    pub fn get_treasury_balances(env: Env) -> Map<Address, i128> {
+        let mut balances = Map::new(&env);
+        for asset in storage::get_whitelisted_tokens(&env).iter() {
+            let balance = util::treasury_balance_in_asset(&env, &asset);
+            balances.set(asset, balance);
+        }
+        balances
     }
 
     pub fn get_total_members(env: Env) -> u32 {

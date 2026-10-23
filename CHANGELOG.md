@@ -13,6 +13,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Add `get_treasury_balances` view returning a `Map<Address, i128>` of spendable balances across all assets (#281).
 - `scripts/deploy-testnet.sh` deploys a second test asset (`OURTESTB`) on testnet and proposes it for the treasury whitelist; `DEPLOYMENTS.md` tracks it (#342).
 - `get_member_overview(member)` view returning the member record, stake, pending yield, loan stats, registered name and delegate in one call (#340).
 - `get_delegate(delegator)` view returning the address a member delegated their vote to, or `None` (#341).

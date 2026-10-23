@@ -1,8 +1,11 @@
+use super::common::*;
+use crate::Error;
+
 // ==================== issue #309: tests for propose/execute/cancel_policy_update time-lock ====================
 #[test]
 fn policy_update_timelock_propose_and_execute() {
     let s = setup(2);
-    let mut policy = s.client.get_policy().unwrap();
+    let mut policy = s.client.get_loan_policy();
     policy.max_interest_rate = 1_200;
 
     // Propose a policy update
@@ -16,14 +19,14 @@ fn policy_update_timelock_propose_and_execute() {
     advance(&s.env, crate::admin::TIMELOCK_DURATION);
     s.client.execute_policy_update(&s.admin);
 
-    let updated = s.client.get_policy().unwrap();
+    let updated = s.client.get_loan_policy();
     assert_eq!(updated.max_interest_rate, 1_200);
 }
 
 #[test]
 fn policy_update_timelock_cancel_before_execution() {
     let s = setup(2);
-    let mut policy = s.client.get_policy().unwrap();
+    let mut policy = s.client.get_loan_policy();
     policy.min_membership_duration = 36 * 60 * 60;
 
     // Propose a policy update
@@ -41,7 +44,7 @@ fn policy_update_timelock_cancel_before_execution() {
 #[test]
 fn policy_update_timelock_block_after_execution() {
     let s = setup(2);
-    let mut policy = s.client.get_policy().unwrap();
+    let mut policy = s.client.get_loan_policy();
     policy.max_loan_to_treasury_ratio = 6_000;
 
     // Propose and execute
@@ -50,7 +53,7 @@ fn policy_update_timelock_block_after_execution() {
     s.client.execute_policy_update(&s.admin);
 
     // Another propose should work (new update can be proposed)
-    let mut policy2 = s.client.get_policy().unwrap();
+    let mut policy2 = s.client.get_loan_policy();
     policy2.min_membership_duration = 72 * 60 * 60;
     s.client.propose_policy_update(&s.admin, &policy2);
 
@@ -58,6 +61,6 @@ fn policy_update_timelock_block_after_execution() {
     advance(&s.env, crate::admin::TIMELOCK_DURATION);
     s.client.execute_policy_update(&s.admin);
 
-    let updated = s.client.get_policy().unwrap();
+    let updated = s.client.get_loan_policy();
     assert_eq!(updated.min_membership_duration, 72 * 60 * 60);
 }
