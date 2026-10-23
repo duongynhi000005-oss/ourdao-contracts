@@ -7,6 +7,8 @@ pub const NAME_MIN_LEN: u32 = 3;
 /// Maximum length for a registered name (inclusive). Keeps the on-chain
 /// storage and every `name_reg` event payload bounded.
 pub const NAME_MAX_LEN: u32 = 32;
+/// Maximum number of whitelisted tokens allowed including the base token (#282).
+pub const MAX_WHITELISTED_TOKENS: u32 = 10;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

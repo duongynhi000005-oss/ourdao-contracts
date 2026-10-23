@@ -685,3 +685,49 @@ fn storage_keys_keep_their_ledger_encoding() {
             .has(&(Symbol::new(&s.env, "Member"), member)));
     });
 }
+
+// ==================== issue #282: cap whitelisted tokens ====================
+#[test]
+fn whitelisted_tokens_capped_at_max() {
+    let s = setup(1);
+    let base = s.token.address.clone();
+    assert!(s.client.is_token_whitelisted(&base));
+    assert_eq!(s.client.get_whitelisted_tokens().len(), 1);
+
+    // Whitelist 9 additional tokens to reach MAX_WHITELISTED_TOKENS (10)
+    let mut extra_tokens = Vec::new(&s.env);
+    for _ in 0..9 {
+        let issuer = Address::generate(&s.env);
+        let extra = s.env.register_stellar_asset_contract_v2(issuer).address();
+        s.client.propose_token_addition(&s.admin, &extra);
+        advance(&s.env, TIMELOCK_DURATION);
+        s.client.execute_token_addition(&s.admin, &extra);
+        assert!(s.client.is_token_whitelisted(&extra));
+        extra_tokens.push_back(extra);
+    }
+
+    assert_eq!(s.client.get_whitelisted_tokens().len(), 10);
+
+    // Adding token #11 fails with MaxWhitelistedTokensReached
+    let eleventh_issuer = Address::generate(&s.env);
+    let eleventh = s
+        .env
+        .register_stellar_asset_contract_v2(eleventh_issuer)
+        .address();
+    assert_eq!(
+        s.client.try_propose_token_addition(&s.admin, &eleventh),
+        Err(Ok(Error::MaxWhitelistedTokensReached))
+    );
+
+    // Removing a token drops length to 9 and allows adding another token
+    let removed = extra_tokens.get(0).unwrap();
+    s.client.remove_token(&s.admin, &removed);
+    assert_eq!(s.client.get_whitelisted_tokens().len(), 9);
+
+    // Now adding the eleventh token succeeds
+    s.client.propose_token_addition(&s.admin, &eleventh);
+    advance(&s.env, TIMELOCK_DURATION);
+    s.client.execute_token_addition(&s.admin, &eleventh);
+    assert_eq!(s.client.get_whitelisted_tokens().len(), 10);
+    assert!(s.client.is_token_whitelisted(&eleventh));
+}

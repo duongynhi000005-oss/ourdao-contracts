@@ -266,6 +266,9 @@ pub fn unpause(env: &Env, caller: Address) -> Result<(), Error> {
 pub fn propose_token_addition(env: &Env, caller: Address, token: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_admin(env, &caller)?;
+    if storage::get_whitelisted_tokens(env).len() >= crate::types::MAX_WHITELISTED_TOKENS {
+        return Err(Error::MaxWhitelistedTokensReached);
+    }
     if storage::is_token_whitelisted(env, &token) {
         return Err(Error::TokenAlreadyWhitelisted);
     }
@@ -285,6 +288,9 @@ pub fn propose_token_addition(env: &Env, caller: Address, token: Address) -> Res
 pub fn execute_token_addition(env: &Env, caller: Address, token: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_admin(env, &caller)?;
+    if storage::get_whitelisted_tokens(env).len() >= crate::types::MAX_WHITELISTED_TOKENS {
+        return Err(Error::MaxWhitelistedTokensReached);
+    }
     let execution_time =
         storage::get_pending_token_addition(env, &token).ok_or(Error::NoPendingTokenAddition)?;
     if env.ledger().timestamp() < execution_time {

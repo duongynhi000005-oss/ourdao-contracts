@@ -760,3 +760,21 @@ fn error_borrower_cannot_vote() {
     let result = s.client.try_vote_on_loan_proposal(&borrower, &proposal_id, &true);
     assert_eq!(result, Err(Ok(Error::BorrowerCannotVote)));
 }
+
+
+// MaxWhitelistedTokensReached = 92
+#[test]
+fn error_max_whitelisted_tokens_reached() {
+    let s = setup(1);
+    for _ in 0..9 {
+        let issuer = Address::generate(&s.env);
+        let extra = s.env.register_stellar_asset_contract_v2(issuer).address();
+        s.client.propose_token_addition(&s.admin, &extra);
+        advance(&s.env, crate::admin::TIMELOCK_DURATION);
+        s.client.execute_token_addition(&s.admin, &extra);
+    }
+    let overflow = Address::generate(&s.env);
+    let sac = s.env.register_stellar_asset_contract_v2(overflow).address();
+    let result = s.client.try_propose_token_addition(&s.admin, &sac);
+    assert_eq!(result, Err(Ok(Error::MaxWhitelistedTokensReached)));
+}
