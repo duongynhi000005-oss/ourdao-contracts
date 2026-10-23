@@ -261,6 +261,78 @@ fn pause_blocks_all_mutating_entrypoints() {
         "attach_document should be pause-gated"
     );
 
+    // ==================== Delegation ====================
+    let res = s.client.try_delegate_vote(&borrower, &voter);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "delegate_vote should be pause-gated"
+    );
+
+    // ==================== Multi-Asset & Additional Proposals ====================
+    let dummy_asset = Address::generate(&s.env);
+    let res = s
+        .client
+        .try_request_loan_in_asset(&borrower, &1000, &dummy_asset, &None);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "request_loan_in_asset should be pause-gated"
+    );
+
+    let res = s
+        .client
+        .try_repay_loan_in_asset(&borrower, &0, &dummy_asset);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "repay_loan_in_asset should be pause-gated"
+    );
+
+    let res = s.client.try_propose_withdrawal_in_asset(
+        &borrower,
+        &100,
+        &dummy_asset,
+        &newcomer,
+        &String::from_str(&s.env, "test"),
+        &false,
+    );
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "propose_withdrawal_in_asset should be pause-gated"
+    );
+
+    let res = s.client.try_cancel_loan_proposal(&borrower, &loan_pid);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "cancel_loan_proposal should be pause-gated"
+    );
+
+    let res = s
+        .client
+        .try_cancel_treasury_proposal(&borrower, &treasury_pid);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "cancel_treasury_proposal should be pause-gated"
+    );
+
+    let batch = Vec::from_array(
+        &s.env,
+        [crate::types::ProposalVote {
+            proposal_id: loan_pid,
+            vote: true,
+        }],
+    );
+    let res = s.client.try_vote_batch(&voter, &batch);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "vote_batch should be pause-gated"
+    );
+
     // Verify unpause works
     s.client.unpause(&s.admin);
     assert!(!s.client.is_paused());

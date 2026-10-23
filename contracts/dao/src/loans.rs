@@ -475,6 +475,7 @@ pub fn repay_loan_in_asset(
     asset: Address,
 ) -> Result<(), Error> {
     util::require_initialized(env)?;
+    util::require_not_paused(env)?;
     if storage::get_loan(env, loan_id).is_none() {
         return Err(Error::LoanNotFound);
     }
