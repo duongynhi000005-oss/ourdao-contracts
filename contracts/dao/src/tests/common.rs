@@ -183,7 +183,9 @@ pub fn create_token_with_decimals(env: &Env, decimals: u32) -> token::Client<'_>
     let client = token::Client::new(env, &token_id);
 
     // Set decimals through metadata
-    env.storage().instance().set(&("decimals", &token_id), &decimals);
+    env.storage()
+        .instance()
+        .set(&("decimals", &token_id), &decimals);
 
     client
 }

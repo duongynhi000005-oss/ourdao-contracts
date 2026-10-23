@@ -278,7 +278,10 @@ fn only_admin_can_unpause_even_when_a_dedicated_pauser_exists() {
 
     // The emergency pauser may stop the DAO but must not be able to resume it.
     assert_eq!(s.client.try_unpause(&pauser), Err(Ok(Error::NotAdmin)));
-    assert!(s.client.is_paused(), "unauthorised unpause must not change state");
+    assert!(
+        s.client.is_paused(),
+        "unauthorised unpause must not change state"
+    );
 
     // An unrelated address must likewise be rejected without clearing the pause.
     assert_eq!(s.client.try_unpause(&outsider), Err(Ok(Error::NotAdmin)));
@@ -622,6 +625,89 @@ fn token_whitelist_lifecycle() {
         s.client.try_remove_token(&s.admin, &extra),
         Err(Ok(Error::TokenNotWhitelisted))
     );
+}
+
+#[test]
+fn token_whitelist_events_carry_caller_and_token() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::xdr::{ContractEventBody, ScVal};
+    use soroban_sdk::TryFromVal;
+
+    let s = setup(1);
+    let admin2 = Address::generate(&s.env);
+    s.client.add_admin(&s.admin, &admin2);
+
+    let issuer = Address::generate(&s.env);
+    let extra = s.env.register_stellar_asset_contract_v2(issuer).address();
+
+    // 1. Propose token addition
+    let prop_time = s.env.ledger().timestamp();
+    s.client.propose_token_addition(&s.admin, &extra);
+
+    let all = s.env.events().all();
+    let event = all
+        .events()
+        .iter()
+        .rev()
+        .find(|e| {
+            let ContractEventBody::V0(body) = &e.body;
+            matches!(body.topics.first(), Some(ScVal::Symbol(sym)) if sym.0.to_utf8_string_lossy() == "tok_prop")
+        })
+        .expect("tok_prop event not found");
+    let ContractEventBody::V0(body) = &event.body;
+    assert_eq!(body.topics.len(), 1);
+    let ScVal::Vec(Some(data)) = &body.data else {
+        panic!("expected vec data for tok_prop");
+    };
+    assert_eq!(data.len(), 3);
+    assert_eq!(Address::try_from_val(&s.env, &data[0]).unwrap(), s.admin);
+    assert_eq!(Address::try_from_val(&s.env, &data[1]).unwrap(), extra);
+    assert_eq!(data[2], ScVal::U64(prop_time + TIMELOCK_DURATION));
+
+    // 2. Execute token addition by admin2 once timelock expired
+    advance(&s.env, TIMELOCK_DURATION);
+    s.client.execute_token_addition(&admin2, &extra);
+
+    let all = s.env.events().all();
+    let event = all
+        .events()
+        .iter()
+        .rev()
+        .find(|e| {
+            let ContractEventBody::V0(body) = &e.body;
+            matches!(body.topics.first(), Some(ScVal::Symbol(sym)) if sym.0.to_utf8_string_lossy() == "tok_add")
+        })
+        .expect("tok_add event not found");
+    let ContractEventBody::V0(body) = &event.body;
+    assert_eq!(body.topics.len(), 1);
+    let ScVal::Vec(Some(data)) = &body.data else {
+        panic!("expected vec data for tok_add");
+    };
+    assert_eq!(data.len(), 2);
+    assert_eq!(Address::try_from_val(&s.env, &data[0]).unwrap(), admin2);
+    assert_eq!(Address::try_from_val(&s.env, &data[1]).unwrap(), extra);
+
+    // 3. Remove token by original admin
+    s.client.remove_token(&s.admin, &extra);
+
+    let all = s.env.events().all();
+    let event = all
+        .events()
+        .iter()
+        .rev()
+        .find(|e| {
+            let ContractEventBody::V0(body) = &e.body;
+            matches!(body.topics.first(), Some(ScVal::Symbol(sym)) if sym.0.to_utf8_string_lossy() == "tok_rem")
+        })
+        .expect("tok_rem event not found");
+    let ContractEventBody::V0(body) = &event.body;
+    assert_eq!(body.topics.len(), 1);
+    let ScVal::Vec(Some(data)) = &body.data else {
+        panic!("expected vec data for tok_rem");
+    };
+    assert_eq!(data.len(), 2);
+    assert_eq!(Address::try_from_val(&s.env, &data[0]).unwrap(), s.admin);
+    assert_eq!(Address::try_from_val(&s.env, &data[1]).unwrap(), extra);
 }
 
 // Admin list handling uses host-side lookups (#357); the list stays a set.

@@ -116,6 +116,14 @@ fn name_leading_trailing_separator_rejected() {
     let trail = String::from_str(&s.env, "alice-");
     let res = s.client.try_register_name(&owner, &trail);
     assert_eq!(res, Err(Ok(Error::InvalidName)));
+
+    let lead2 = String::from_str(&s.env, "_alice");
+    let res = s.client.try_register_name(&owner, &lead2);
+    assert_eq!(res, Err(Ok(Error::InvalidName)));
+
+    let trail2 = String::from_str(&s.env, "alice_");
+    let res = s.client.try_register_name(&owner, &trail2);
+    assert_eq!(res, Err(Ok(Error::InvalidName)));
 }
 
 // ==================== issue #301: name release on exit ====================
@@ -163,15 +171,6 @@ fn name_can_be_reregistered_after_exit_and_rejoin() {
     // Member can re-register the same name after rejoining.
     s.client.register_name(&member, &name);
     assert_eq!(s.client.name_of(&member), Some(name));
-}
-
-    let lead2 = String::from_str(&s.env, "_alice");
-    let res = s.client.try_register_name(&owner, &lead2);
-    assert_eq!(res, Err(Ok(Error::InvalidName)));
-
-    let trail2 = String::from_str(&s.env, "alice_");
-    let res = s.client.try_register_name(&owner, &trail2);
-    assert_eq!(res, Err(Ok(Error::InvalidName)));
 }
 
 #[test]
