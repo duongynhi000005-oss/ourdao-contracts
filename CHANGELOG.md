@@ -14,6 +14,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Property test proving a member never has two active loans across random request, approve, partial repay, full repay, and default sequences (#291).
 - Property test proving the sum of all member exit shares across any sequence of joins, slashes, and exits never exceeds the treasury balance (256+ cases) (#289).
 - Property test proving staked funds are strictly excluded from spendable treasury and can never be consumed or disbursed by any loan (#290).
 - Test suite verifying many tiny partial repayments (including single-unit stroops) across base and multi-token assets sum exactly to total_repayment (#300).

@@ -523,3 +523,133 @@ proptest! {
         prop_assert_eq!(cumulative_payouts + final_treasury, initial_treasury);
     }
 }
+
+// ==================== issue #291: member never has two active loans ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(30))]
+
+    /// Invariant for issue #291:
+    /// A member NEVER has more than one active loan at any point in time.
+    /// Across random request, approve, partial repay, full repay, and default cycles:
+    /// 1. `member.has_active_loan` strictly equals `(active_loans_count == 1)`.
+    /// 2. `member.active_loans <= 1` holds in every state.
+    /// 3. While a loan is active, new loan requests (in base or second asset) are
+    ///    strictly rejected with `Error::HasActiveLoan`.
+    /// 4. Once a loan is fully repaid or marked defaulted, the flag is cleared
+    ///    and the member becomes eligible again.
+    #[test]
+    fn member_never_has_two_active_loans_property(
+        loan_amount in 100i128..=1_000,
+        cycles in 1u32..=3,
+        partial_ratio in 10u32..=90u32,
+        resolve_by_default in proptest::bool::ANY,
+    ) {
+        let s = setup(3);
+        let token_mint = token::StellarAssetClient::new(&s.env, &s.token.address);
+        token_mint.mint(&s.client.address, &100_000);
+
+        let borrower = s.members.get(0).unwrap();
+        let v1 = s.members.get(1).unwrap();
+        let v2 = s.members.get(2).unwrap();
+
+        // Helper to count active loans for borrower directly from contract storage
+        let count_active_loans = |env: &Env, cid: &Address, b: &Address| -> u32 {
+            env.as_contract(cid, || {
+                let next_id = crate::storage::next_id(env, crate::storage::DataKey::NextProposalId);
+                let mut count = 0;
+                for id in 1..next_id {
+                    if let Some(loan) = crate::storage::get_loan(env, id) {
+                        if &loan.borrower == b && loan.status == crate::types::LoanStatus::Active {
+                            count += 1;
+                        }
+                    }
+                }
+                count
+            })
+        };
+
+        for _cycle in 0..cycles {
+            // Initial state: borrower has 0 active loans
+            let mem_before = s.client.get_member(&borrower).unwrap();
+            prop_assert!(!mem_before.has_active_loan);
+            prop_assert_eq!(mem_before.active_loans, 0);
+            prop_assert_eq!(count_active_loans(&s.env, &s.client.address, &borrower), 0);
+
+            // 1. Request loan
+            let pid = s.client.request_loan(&borrower, &loan_amount, &None);
+            advance(&s.env, EDITING + 1);
+
+            // 2. Approve and disburse
+            s.client.vote_on_loan_proposal(&v1, &pid, &true);
+            let p_check = s.client.get_loan_proposal(&pid).unwrap();
+            if p_check.status == crate::types::ProposalStatus::Pending {
+                s.client.vote_on_loan_proposal(&v2, &pid, &true);
+            }
+
+            let loan = s.client.get_loan(&pid).unwrap();
+            prop_assert_eq!(loan.status, crate::types::LoanStatus::Active);
+
+            // Invariant Check A: Member now has exactly 1 active loan
+            let mem_active = s.client.get_member(&borrower).unwrap();
+            prop_assert!(mem_active.has_active_loan);
+            prop_assert_eq!(mem_active.active_loans, 1);
+            prop_assert_eq!(count_active_loans(&s.env, &s.client.address, &borrower), 1);
+
+            // Invariant Check B: Attempting to request a second loan is strictly rejected
+            let second_req = s.client.try_request_loan(&borrower, &loan_amount, &None);
+            prop_assert_eq!(second_req, Err(Ok(crate::Error::HasActiveLoan)));
+
+            // Also rejected when requesting in another asset
+            let second_asset_req = s.client.try_request_loan_in_asset(&borrower, &loan_amount, &s.token.address, &None);
+            prop_assert_eq!(second_asset_req, Err(Ok(crate::Error::HasActiveLoan)));
+
+            // 3. Optional partial repayment
+            let partial_amt = (loan.total_repayment * partial_ratio as i128) / 100;
+            if partial_amt > 0 && partial_amt < loan.total_repayment {
+                s.client.repay_loan_partial(&borrower, &pid, &partial_amt);
+
+                // Invariant Check C: Still exactly 1 active loan during partial repayment
+                let mem_partial = s.client.get_member(&borrower).unwrap();
+                prop_assert!(mem_partial.has_active_loan);
+                prop_assert_eq!(mem_partial.active_loans, 1);
+                prop_assert_eq!(count_active_loans(&s.env, &s.client.address, &borrower), 1);
+
+                // Still blocked from requesting second loan
+                prop_assert_eq!(
+                    s.client.try_request_loan(&borrower, &loan_amount, &None),
+                    Err(Ok(crate::Error::HasActiveLoan))
+                );
+            }
+
+            // 4. Resolve the loan (either full repayment or default)
+            let cur_loan = s.client.get_loan(&pid).unwrap();
+            if resolve_by_default {
+                // Advance past due time + default grace period
+                let now = s.env.ledger().timestamp();
+                advance(&s.env, cur_loan.due_time.saturating_sub(now) + 10);
+                s.client.mark_loan_defaulted(&pid);
+
+                let def_loan = s.client.get_loan(&pid).unwrap();
+                prop_assert_eq!(def_loan.status, crate::types::LoanStatus::Defaulted);
+            } else {
+                // Mint remaining balance to borrower if needed and repay fully
+                let remaining = cur_loan.total_repayment - cur_loan.amount_repaid;
+                token_mint.mint(&borrower, &remaining);
+                s.client.repay_loan_partial(&borrower, &pid, &remaining);
+
+                let rep_loan = s.client.get_loan(&pid).unwrap();
+                prop_assert_eq!(rep_loan.status, crate::types::LoanStatus::Repaid);
+            }
+
+            // Invariant Check D: Active loan count returns to 0 and flag is cleared
+            let mem_resolved = s.client.get_member(&borrower).unwrap();
+            prop_assert!(!mem_resolved.has_active_loan);
+            prop_assert_eq!(mem_resolved.active_loans, 0);
+            prop_assert_eq!(count_active_loans(&s.env, &s.client.address, &borrower), 0);
+
+            // Re-check global property: active_loans <= 1 in all states
+            prop_assert!(mem_resolved.active_loans <= 1);
+        }
+    }
+}
