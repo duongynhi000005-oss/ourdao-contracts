@@ -1,3 +1,5 @@
+extern crate std;
+
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{token, Address, Env, String, Vec};
@@ -651,5 +653,205 @@ proptest! {
             // Re-check global property: active_loans <= 1 in all states
             prop_assert!(mem_resolved.active_loans <= 1);
         }
+    }
+}
+
+// ==================== issue #292: loan.id == proposal.id under random rejections/expiries ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(30))]
+
+    /// Invariant for issue #292:
+    /// Extends the deterministic regression test (`loan_id_matches_its_originating_proposal_id`)
+    /// into a randomized property test.
+    /// Under arbitrary sequences of proposal approvals, rejections, expiries, and cancellations
+    /// across multiple members and assets (#236):
+    /// 1. For every created loan, `loan.id == proposal.id` unconditionally holds.
+    /// 2. No ID skew or counter drift occurs when intermediate proposals are rejected,
+    ///    expired, or cancelled.
+    /// 3. Non-approved proposals never instantiate a loan record (`get_loan(pid).is_none()`).
+    /// 4. Total loans in contract storage exactly match the count of approved proposals,
+    ///    with 1:1 ID parity.
+    #[test]
+    fn loan_id_equals_proposal_id_under_random_rejections_and_expiries_property(
+        actions in prop::collection::vec(
+            (
+                0u8..4u8,        // 0: Approve, 1: Reject, 2: Expire, 3: Cancel
+                0u8..3u8,        // Borrower index (0, 1, or 2)
+                50i128..500i128, // Loan principal amount
+                any::<bool>(),   // Single-token base vs multi-token asset (#236)
+            ),
+            5..=20,
+        ),
+    ) {
+        let s = setup(3);
+        mint_asset(&s, &s.token.address, &s.client.address, 1_000_000);
+
+        // Whitelist a secondary token to exercise multi-token support (#236)
+        let asset2 = whitelist_second_asset(&s, 1_000_000);
+
+        for member in s.members.iter() {
+            mint_asset(&s, &s.token.address, &member, 1_000_000);
+            mint_asset(&s, &asset2.address, &member, 1_000_000);
+        }
+
+        struct TrackedProposal {
+            id: u32,
+            borrower: Address,
+            amount: i128,
+            was_approved: bool,
+        }
+
+        let mut tracked: std::vec::Vec<TrackedProposal> = std::vec::Vec::new();
+        let mut active_loans: [Option<(u32, bool)>; 3] = [None, None, None];
+
+        for (action_type, b_raw, amount, use_second_asset) in actions {
+            let b_idx = (b_raw as usize) % 3;
+            let borrower = s.members.get(b_idx as u32).unwrap();
+
+            // If this borrower already has an active loan, repay it first so they are eligible to borrow again
+            if let Some((active_id, is_asset2)) = active_loans[b_idx] {
+                if let Some(cur_loan) = s.client.get_loan(&active_id) {
+                    let remaining = cur_loan.total_repayment - cur_loan.amount_repaid;
+                    if remaining > 0 {
+                        if is_asset2 {
+                            mint_asset(&s, &asset2.address, &borrower, remaining);
+                            s.client.repay_loan_in_asset(&borrower, &active_id, &asset2.address);
+                        } else {
+                            mint_asset(&s, &s.token.address, &borrower, remaining);
+                            s.client.repay_loan(&borrower, &active_id);
+                        }
+                    }
+                }
+                active_loans[b_idx] = None;
+            }
+
+            let v1 = s.members.get(((b_idx + 1) % 3) as u32).unwrap();
+            let v2 = s.members.get(((b_idx + 2) % 3) as u32).unwrap();
+
+            let pid = if use_second_asset {
+                s.client.request_loan_in_asset(&borrower, &amount, &asset2.address, &None)
+            } else {
+                s.client.request_loan(&borrower, &amount, &None)
+            };
+
+            match action_type {
+                0 => {
+                    // Action: Approve & Disburse
+                    advance(&s.env, EDITING + 1);
+                    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+                    let p_check = s.client.get_loan_proposal(&pid).unwrap();
+                    if p_check.status == crate::types::ProposalStatus::Pending {
+                        s.client.vote_on_loan_proposal(&v2, &pid, &true);
+                    }
+
+                    // Invariant Check 1: Loan exists and loan.id == proposal.id
+                    let loan = s.client.get_loan(&pid).expect("Approved proposal must produce loan");
+                    prop_assert_eq!(loan.id, pid);
+                    prop_assert_eq!(loan.borrower, borrower.clone());
+                    prop_assert_eq!(loan.principal, amount);
+                    prop_assert_eq!(loan.status, crate::types::LoanStatus::Active);
+
+                    active_loans[b_idx] = Some((pid, use_second_asset));
+                    tracked.push(TrackedProposal {
+                        id: pid,
+                        borrower: borrower.clone(),
+                        amount,
+                        was_approved: true,
+                    });
+                }
+                1 => {
+                    // Action: Reject
+                    advance(&s.env, EDITING + 1);
+                    s.client.vote_on_loan_proposal(&v1, &pid, &false);
+                    s.client.vote_on_loan_proposal(&v2, &pid, &false);
+
+                    let prop = s.client.get_loan_proposal(&pid).unwrap();
+                    prop_assert_eq!(prop.status, crate::types::ProposalStatus::Rejected);
+
+                    // Invariant Check 2: Rejected proposal produces NO loan
+                    prop_assert!(s.client.get_loan(&pid).is_none());
+
+                    tracked.push(TrackedProposal {
+                        id: pid,
+                        borrower: borrower.clone(),
+                        amount,
+                        was_approved: false,
+                    });
+                }
+                2 => {
+                    // Action: Expire
+                    advance(&s.env, EDITING + VOTING_PERIOD + 10);
+                    s.client.expire_loan_proposal(&pid);
+
+                    let prop = s.client.get_loan_proposal(&pid).unwrap();
+                    prop_assert_eq!(prop.phase, crate::types::ProposalPhase::Expired);
+
+                    // Invariant Check 3: Expired proposal produces NO loan
+                    prop_assert!(s.client.get_loan(&pid).is_none());
+
+                    tracked.push(TrackedProposal {
+                        id: pid,
+                        borrower: borrower.clone(),
+                        amount,
+                        was_approved: false,
+                    });
+                }
+                3 => {
+                    // Action: Cancel (during editing phase)
+                    s.client.cancel_loan_proposal(&borrower, &pid);
+
+                    let prop = s.client.get_loan_proposal(&pid).unwrap();
+                    prop_assert_eq!(prop.status, crate::types::ProposalStatus::Cancelled);
+
+                    // Invariant Check 4: Cancelled proposal produces NO loan
+                    prop_assert!(s.client.get_loan(&pid).is_none());
+
+                    tracked.push(TrackedProposal {
+                        id: pid,
+                        borrower: borrower.clone(),
+                        amount,
+                        was_approved: false,
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Global Invariant Verification across all proposals in history:
+        for rec in &tracked {
+            if rec.was_approved {
+                let loan = s.client.get_loan(&rec.id).expect("Approved proposal must retain loan record");
+                prop_assert_eq!(loan.id, rec.id);
+                prop_assert_eq!(loan.borrower, rec.borrower.clone());
+                prop_assert_eq!(loan.principal, rec.amount);
+            } else {
+                prop_assert!(
+                    s.client.get_loan(&rec.id).is_none(),
+                    "Non-approved proposal {} must never produce a loan",
+                    rec.id
+                );
+            }
+        }
+
+        // Verify total proposal count matches tracked history length
+        let total_proposals = s.client.get_loan_proposal_count();
+        prop_assert_eq!(total_proposals, tracked.len() as u32);
+
+        // Storage Verification: Ensure exactly the approved loans exist in contract storage
+        s.env.as_contract(&s.client.address, || {
+            let mut storage_loan_count = 0;
+            for id in 0..total_proposals {
+                if let Some(loan) = crate::storage::get_loan(&s.env, id) {
+                    assert_eq!(loan.id, id, "Storage loan.id must match proposal.id key");
+                    storage_loan_count += 1;
+                }
+            }
+            let expected_approved = tracked.iter().filter(|r| r.was_approved).count();
+            assert_eq!(
+                storage_loan_count, expected_approved,
+                "Storage active/terminal loan count must exactly match approved proposals"
+            );
+        });
     }
 }
