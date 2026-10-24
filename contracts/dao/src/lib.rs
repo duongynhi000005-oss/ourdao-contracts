@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 //! OurDAO — a member-owned lending DAO for Stellar Soroban.
 //!
 //! All value moves through a single configurable token set at initialization
@@ -636,9 +637,10 @@ impl OurDao {
         let from = start.min(len);
         let to = (start + limit).min(len);
         for i in from..to {
-            let addr = all.get(i).unwrap();
-            if let Some(m) = storage::get_member(&env, &addr) {
-                out.push_back(m);
+            if let Some(addr) = all.get(i) {
+                if let Some(m) = storage::get_member(&env, &addr) {
+                    out.push_back(m);
+                }
             }
         }
         out

@@ -1,5 +1,6 @@
 use soroban_sdk::{contracttype, Address, BytesN, Env, String, Vec};
 
+use crate::error::Error;
 use crate::types::{Loan, LoanPolicy, LoanProposal, Member, PendingPolicyUpdate, TreasuryProposal};
 
 // Soroban produces one ledger every ~5 seconds.
@@ -107,7 +108,10 @@ pub fn is_initialized(env: &Env) -> bool {
 }
 
 pub fn get_admins(env: &Env) -> Vec<Address> {
-    env.storage().instance().get(&DataKey::Admins).unwrap()
+    match env.storage().instance().get(&DataKey::Admins) {
+        Some(admins) => admins,
+        None => soroban_sdk::panic_with_error!(env, Error::NotInitialized),
+    }
 }
 
 pub fn set_admins(env: &Env, admins: &Vec<Address>) {
@@ -127,7 +131,10 @@ pub fn remove_pauser(env: &Env) {
 }
 
 pub fn get_threshold(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::Threshold).unwrap()
+    match env.storage().instance().get(&DataKey::Threshold) {
+        Some(t) => t,
+        None => soroban_sdk::panic_with_error!(env, Error::NotInitialized),
+    }
 }
 
 pub fn set_threshold(env: &Env, t: u32) {
@@ -135,10 +142,10 @@ pub fn set_threshold(env: &Env, t: u32) {
 }
 
 pub fn get_membership_fee(env: &Env) -> i128 {
-    env.storage()
-        .instance()
-        .get(&DataKey::MembershipFee)
-        .unwrap()
+    match env.storage().instance().get(&DataKey::MembershipFee) {
+        Some(fee) => fee,
+        None => soroban_sdk::panic_with_error!(env, Error::NotInitialized),
+    }
 }
 
 pub fn set_membership_fee(env: &Env, fee: i128) {
@@ -146,7 +153,10 @@ pub fn set_membership_fee(env: &Env, fee: i128) {
 }
 
 pub fn get_token(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Token).unwrap()
+    match env.storage().instance().get(&DataKey::Token) {
+        Some(token) => token,
+        None => soroban_sdk::panic_with_error!(env, Error::NotInitialized),
+    }
 }
 
 pub fn set_token(env: &Env, token: &Address) {
@@ -154,7 +164,10 @@ pub fn set_token(env: &Env, token: &Address) {
 }
 
 pub fn get_policy(env: &Env) -> LoanPolicy {
-    env.storage().instance().get(&DataKey::Policy).unwrap()
+    match env.storage().instance().get(&DataKey::Policy) {
+        Some(policy) => policy,
+        None => soroban_sdk::panic_with_error!(env, Error::NotInitialized),
+    }
 }
 
 pub fn set_policy(env: &Env, policy: &LoanPolicy) {

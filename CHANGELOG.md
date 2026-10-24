@@ -5,6 +5,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 ## [Unreleased]
 
 ### Changed
+- Enforce zero unwrap/expect in production contract code via #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))] and replace raw unwraps with Error::NotInitialized (#253).
 - Replace magic numbers in loans.rs and treasury.rs with named constants from types.rs (BPS_CEIL_INCREMENT, MAX_METADATA_CID_LEN, MAX_PROPOSAL_REASON_LEN, PRIVATE_PROPOSAL_PERIOD_MULTIPLIER) (#250).
 - Explicitly enforce and document that pausers cannot unpause (`admin::unpause` requires admin authorization and rejects non-admin pausers with `Error::NotAdmin`), separating emergency halt and resume privileges (#319).
 - `loan_req`, `loan_appr`, `loan_rpy` and `interest` events now carry the loan's `asset` as a trailing field (#343). Existing positional fields are unchanged, so indexers that read by position keep working; `interest` is only emitted for base-token repayments.
@@ -68,6 +69,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - PR template: checkboxes for "single issue only" and "ABI/event changes" (#382).
 
 ### Changed
+- Enforce zero unwrap/expect in production contract code via #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))] and replace raw unwraps with Error::NotInitialized (#253).
 - Pending yield has a single definition (`membership::compute_pending_yield`) shared by `get_pending_yield`, `claim_rewards` and `exit_dao` (#92).
 - Loan proposals that time out without quorum are now stored as `status = Expired` (previously `Rejected`), matching `phase` and the `loan_exp` event; early rejection stays `Rejected` / `loan_rej` (#86).
 - Defaulting a loan forfeits the borrower's unclaimed yield; yield stays equal-split and exit share stays contribution-weighted, now documented in the README (#89).
