@@ -1,6 +1,6 @@
 # LoanPolicy Parameter Guide
 
-`LoanPolicy` has twelve tunable parameters that control who can borrow, how
+`LoanPolicy` has thirteen tunable parameters that control who can borrow, how
 much, at what rate, and what happens when a loan goes wrong. This document
 explains each parameter: what it controls, its units, its interactions with
 other parameters, and a suggested starting value.
@@ -49,17 +49,26 @@ choose carefully.
 
 ---
 
-### `min_interest_rate: u32` and `max_interest_rate: u32`
+### `min_interest_rate: u32`
 **Units:** basis points (1 bp = 0.01%; 10_000 bp = 100%).  
-**What they control:** The linear interest-rate curve. A small loan relative
-to the treasury gets `min_interest_rate`; a loan at the maximum ratio gets
-`max_interest_rate`. Any amount in between is interpolated linearly and
-clamped to this range.  
-**Interactions:** The property test `loan_terms_rate_stays_within_policy_bounds`
-verifies that the quoted rate is always within `[min, max]`.  
-**Constraint:** `min_interest_rate <= max_interest_rate`; both must be ≤
-10_000 (100%).  
-**Suggested start:** `min = 500` (5%), `max = 2_000` (20%).
+**What it controls:** The floor of the linear interest-rate curve. A small loan
+relative to the treasury is charged this minimum interest rate.  
+**Interactions:** Paired with `max_interest_rate` to define the rate spread.
+The property test `loan_terms_rate_stays_within_policy_bounds` verifies that the
+quoted rate is always within `[min, max]`.  
+**Constraint:** `min_interest_rate <= max_interest_rate`; must be ≤ 10_000 (100%).  
+**Suggested start:** `500` (5%).
+
+---
+
+### `max_interest_rate: u32`
+**Units:** basis points (1 bp = 0.01%; 10_000 bp = 100%).  
+**What it controls:** The ceiling of the linear interest-rate curve. A loan reaching
+`max_loan_to_treasury_ratio` is charged this maximum interest rate. Any loan amount
+in between is interpolated linearly and clamped to this range.  
+**Interactions:** Sets the upper bound on borrowing yield.  
+**Constraint:** `max_interest_rate >= min_interest_rate`; must be ≤ 10_000 (100%).  
+**Suggested start:** `2_000` (20%).
 
 ---
 
@@ -132,9 +141,24 @@ window because `disburse_approved_loan` can only be called after voting closes.
 ### `treasury_threshold: u32`
 **Units:** basis points of the total weighted vote.  
 **What it controls:** The approval threshold for treasury-withdrawal proposals
-(not loan proposals — those use `consensus_threshold`).  
+(not loan proposals — those use `quorum_bps` or `consensus_threshold`).  
 **Constraint:** Must be non-zero and ≤ 10_000 (100%).  
 **Suggested start:** `5_100` (51%).
+
+---
+
+### `quorum_bps: u32`
+**Units:** basis points of the total weighted vote (10_000 bp = 100%).  
+**What it controls:** The approval quorum threshold specifically required for loan
+proposals (`LoanProposal`). When greater than zero, it overrides the global
+`consensus_threshold` (`loans::vote_on_loan_proposal`). When set to `0`, it falls
+back to the global `consensus_threshold` (`storage::get_threshold(env)`).  
+**Interactions:** Allows the DAO to configure dedicated governance gating for
+lending distinct from general proposal consensus or treasury withdrawal thresholds.
+Backwards-compatible with older zero-initialized policies.  
+**Constraint:** Must be ≤ 10_000 (100%). Enforced by `validate_policy`.  
+**Suggested start:** `6_000` (60%). Ensures robust majority support before capital
+is disbursed.
 
 ---
 
@@ -332,6 +356,8 @@ the liquidity needs of its members.
 | `max_loan_duration` >> `default_grace_period` | A defaulted loan can sit in limbo for the full loan duration before anyone can act. |
 | `min_membership_duration` > age of the DAO | No member is old enough to borrow. |
 | `cooldown_period` > `max_loan_duration` | A borrower cannot request a second loan until the cooldown clears, even if they repaid early. Usually fine; document if intentional. |
+| `quorum_bps = 0` | Falls back to global `consensus_threshold`; safe and backwards-compatible, but loans lack tailored approval gating. |
+| `quorum_bps = 10_000` | Requires 100% unanimous member vote to pass any loan; a single inactive or dissenting member permanently deadlocks lending. |
 
 Which parameters are effectively permanent once obligations exist: any parameter
 that is read live against open loans (`max_loan_duration`, `min_interest_rate`,
@@ -357,6 +383,7 @@ LoanPolicy {
     editing_period: 259_200,              // 3 days editing
     voting_period: 259_200,               // 3 days voting
     treasury_threshold: 5_100,            // 51% approval for treasury withdrawals
+    quorum_bps: 6_000,                    // 60% approval for loan proposals (overrides consensus_threshold)
 }
 ```
 
@@ -370,12 +397,14 @@ LoanPolicy {
   debt open for long.
 - 51% threshold for treasury withdrawals matches the consensus threshold,
   keeping governance consistent.
+- 60% loan quorum (`quorum_bps`) requires solid member alignment before disbursing loan capital.
 
 ---
 
 ## References
 
 - `contracts/dao/src/types.rs:58–76` — `LoanPolicy` struct definition
+- `contracts/dao/src/loans.rs` — `quorum_bps` evaluation and `consensus_threshold` fallback
 - `contracts/dao/src/admin.rs:8–26` — `validate_policy`
 - `scripts/deploy-testnet.sh` — deploy script (add a default policy here)
 - Open issues: [#53](https://github.com/ourdao/ourdao-contracts/issues/53),
