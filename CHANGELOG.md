@@ -11,6 +11,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Comprehensive update to `docs/MIGRATION.md` State Inventory covering all 38 `DataKey` storage variants (multi-token whitelist, per-asset balances, emergency pauser, voting delegation, member loan stats, and running active contributions) with flags for missing view getters (#261).
 - `docs/events.schema.json`: machine-readable event schema covering all contract event topics (#344).
 - `treasury::tally` and `loans::vote_on_loan_proposal` read the active-member count (and policy/threshold) once per call (#355).
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).

@@ -19,22 +19,47 @@ There is no way around the core trust tradeoff this creates: **whoever runs a mi
 
 Every category of state a migration must carry, and where it comes from. "View" means read live from the old contract before it's decommissioned. "Event" means reconstructible from `ourdao-backend`'s indexed event log even after the old contract is gone. Where a category needs both — a view to get the *current* value, an event stream to get the *set of addresses/ids to query* — both are listed.
 
-| State | Read source | Notes |
-|---|---|---|
-| Admin set | View: `get_admins()` | Fully enumerable directly — no event replay needed. |
-| Consensus threshold | View: `get_consensus_threshold()` | |
-| Loan policy | View: `get_loan_policy()` | |
-| Token | View: `get_token()` | Decide up front whether the new deployment keeps the same asset. |
-| Member addresses | Event: `joined` (and `exited` for status) | **No contract view enumerates member addresses.** `get_total_members`/`get_active_members` return only counts. The address set must come from replaying `joined` events; current status/fields then come from the view below. |
-| Member record (status, join_ledger, contribution, share_balance, has_active_loan, last_loan_time) | View: `get_member(address)`, per address from the set above | |
-| Stakes | View: `get_stake(address)`, per address (from `staked`/`unstaked` events or the member-address set) | |
-| Pending yield | View: `get_pending_yield(address)`, per address — **must be read live** | **Reconstructible from `exit_dao` events** — the event now emits `(member, share, pending)` so members can recover pending yield from the event log even after the old contract is decommissioned. If a member's entry has expired (see [TTL risk](#ttl--state-archival-risk)) before this is read, their pending yield may still be unrecoverable — accept and document it as a loss for that member rather than guessing. |
-| Active loans + outstanding balance | View: `get_loan(loan_id)`, per id (ids from `loan_req`/`loan_appr` events) | `amount_repaid` and `status` on the struct give the exact outstanding balance, including for partially-repaid loans. |
-| In-flight loan/treasury proposals | View: `get_loan_proposal(id)` / `get_treasury_proposal(id)`, per id (ids from `loan_req`/`tre_prop` events) | See [mid-vote handling](#edge-cases-mid-migration-loans-and-proposals) — the recommendation is *not* to carry these over. |
-| Name registry entries | View: `resolve_name(name)` / `name_of(owner)`, per name (from `name_reg` events) | |
-| Attached document hashes | View: `get_document(kind, id)`, per `(kind, id)` pair (from `doc_attn` events) | Only the hash is on-chain; the underlying content already lives off-chain (IPFS or similar) and needs no migration itself. |
+Following feature additions (multi-token whitelist #236, emergency pauser #184, voting delegation #188, member loan stats #305, and O(1) active contributions #353), every `DataKey` variant in `storage.rs` is cataloged below across its storage type and value schema:
 
-One structural note that falls out of this table: **the member-address set and every loan/proposal/name/doc id must come from the event log**, because the contract's own ABI has no enumeration views. If `ourdao-backend` has not been running continuously since deployment, this procedure cannot be completed — see the RPC caveat below.
+| State Item / DataKey | Storage Type | Schema / Value Type | Read Source | Migration Notes & Flags |
+|---|---|---|---|---|
+| **Admin set** (`DataKey::Admins`) | Instance | `Vec<Address>` | View: `get_admins()` | Fully enumerable directly — no event replay needed. |
+| **Consensus threshold** (`DataKey::Threshold`) | Instance | `u32` | View: `get_consensus_threshold()` | Quorum threshold basis points (e.g. 5100 = 51%). |
+| **Loan policy** (`DataKey::Policy`) | Instance | `LoanPolicy` struct | View: `get_loan_policy()` | Active rates, durations, and treasury ratio bounds. |
+| **Base token** (`DataKey::Token`) | Instance | `Address` | View: `get_token()` | Primary DAO asset used for membership and staking. |
+| **Membership fee** (`DataKey::MembershipFee`) | Instance | `i128` | View: `get_membership_fee()` / Init config | Joining fee denominated strictly in base token. |
+| **Emergency pauser** (`DataKey::Pauser`) | Instance | `Address` | Event: `pauser_set` / `pauser_rev` | ⚠️ **FLAG: No contract view currently exposes active pauser address.** Reconstruct from event replay or re-assign post-migration. |
+| **Pause state** (`DataKey::Paused`) | Instance | `bool` | View: `is_paused()` | Permanent `pause()` on old contract; new deployment starts unpaused. |
+| **Pending policy update** (`DataKey::PendingPolicyUpdate`) | Instance | `(LoanPolicy, u64)` | Event: `policy_prop` / `policy_exec` | ⚠️ **FLAG: No view exposes pending policy draft & execution time.** Recommend executing or cancelling before cutoff. |
+| **Member address set** (`DataKey::Members`) | Instance | `Vec<Address>` | View: `get_members()` / Events: `joined` | Full list of unique member addresses ever joined. |
+| **Member counters** (`TotalMembers`, `ActiveMembers`) | Instance | `u32` | View: `get_total_members()` / `get_active_members()` | Cross-checks total and active member records seeded. |
+| **Member record** (`DataKey::Member(Address)`) | Persistent | `Member` struct | View: `get_member(address)`, per address | Carries `status`, `join_ledger`, `contribution`, `share_balance`, `has_active_loan`, `last_loan_time`. |
+| **Total contributions** (`DataKey::TotalContributions`) | Persistent | `i128` | Storage counter | Cumulative member equity counter. |
+| **Active contributions** (`DataKey::ActiveContributions`) | Persistent | `i128` | Storage counter (#353) | Running sum of `contribution` across all `ActiveMember`s. Reconstructible by summing active members' contributions. |
+| **Vote delegation** (`DataKey::Delegation(Address)`) | Persistent | `Address` | Event: `delegated` | ⚠️ **FLAG: No contract view currently exposes `get_delegate(member)` (#409).** Must be reconstructed by replaying delegation events. |
+| **Member stakes** (`DataKey::Stake(Address)`) | Persistent | `i128` | View: `get_stake(address)`, per address | Staked collateral in base token; eligible for quadratic voting boost. |
+| **Stake timestamps** (`DataKey::StakeTime(Address)`) | Persistent | `u64` | Storage | Timestamp of last stake operation per member. |
+| **Total staked** (`DataKey::TotalStaked`) | Instance | `i128` | View: `get_total_staked()` | Segregated collateral total; excluded from lendable treasury. |
+| **Pending yield** (`DataKey::PendingYield(Address)`) | Persistent | `i128` | View: `get_pending_yield(address)`, per address — **must be read live** | **Reconstructible from `exit_dao` events** — emits `(member, share, pending)`. Seed via pull-accumulator snapshot (`MemberYieldSnapshot = -X`). |
+| **Yield accumulator & remainder** (`YieldAccumulator`, `YieldRemainder`) | Instance / Persistent | `i128` | Internal counters | Pull accumulator resets to 0 on new contract; fractional remainder carries into new treasury balance. |
+| **Member yield snapshot** (`DataKey::MemberYieldSnapshot(Address)`) | Persistent | `i128` | Storage | Pull-accumulator baseline. Seeded as `-pending_yield` on new contract. |
+| **Token whitelist** (`DataKey::WhitelistedTokens`) | Persistent | `Vec<Address>` | View: `get_whitelisted_tokens()` | Ordered list of all secondary whitelisted assets (#236). |
+| **Token whitelist status** (`DataKey::TokenWhitelisted(Address)`) | Persistent | `bool` | View: `is_token_whitelisted(token)` | 1:1 lookup for token whitelist membership. |
+| **Pending token addition** (`DataKey::PendingTokenAddition(Address)`) | Persistent | `u64` | Event: `tok_prop` | ⚠️ **FLAG: No view exposes pending token addition timestamp.** Recommend waiting out 48h timelock before cutoff. |
+| **Per-asset treasury balances** (`DataKey::TreasuryBalance(Address)`) | Persistent | `i128` | View: `get_treasury_balance_in_asset(asset)` | Available uncommitted treasury reserves per whitelisted asset. |
+| **Active loans** (`DataKey::Loan(u32)`) | Persistent | `Loan` struct | View: `get_loan(loan_id)`, per id | Carries `due_time`, `amount`, `outstanding_balance`, `asset`. Settle before migration if possible. |
+| **Loan denomination asset** (`DataKey::LoanAsset(u32)`) | Persistent | `Address` | View: `get_loan(id)` / Event: `loan_asst` | Denomination currency of loan (absent = base token). |
+| **Member loan stats** (`DataKey::MemberLoanStats(Address)`) | Persistent | `MemberLoanStats` struct | View: `get_member_loan_stats(address)` (#305) / Events | Historical borrower track record (`total_borrowed`, `total_repaid`, `default_count`). |
+| **In-flight loan proposals** (`DataKey::LoanProposal(u32)`) | Persistent | `LoanProposal` struct | View: `get_loan_proposal(id)`, per id | Ephemeral; recommend requiring resubmission on new contract. |
+| **In-flight treasury proposals** (`DataKey::TreasuryProposal(u32)`) | Persistent | `TreasuryProposal` struct | View: `get_treasury_proposal(id)`, per id | Ephemeral; recommend resubmission after migration. |
+| **Treasury proposal asset** (`DataKey::TreasuryAsset(u32)`) | Persistent | `Address` | View: `get_treasury_proposal(id)` / Event: `tre_asset` | Payout currency of withdrawal (absent = base token). |
+| **Vote records** (`LoanVoted`, `TreasuryVoted`) | Persistent | `bool` | View: `has_voted(kind, id, voter)` | Per-proposal voter records; dropped if proposals are resubmitted. |
+| **Private vote commitments** (`DataKey::Commit(u32, Address)`) | Persistent | `BytesN<32>` | Event: `committed` | Unrevealed commit-reveal votes; must be revealed before migration cutoff. |
+| **Name registry** (`Name(String)`, `NameOf(Address)`) | Persistent | `Address` / `String` | View: `resolve_name(name)` / `name_of(owner)` | Bi-directional 1:1 handle registry mapping. |
+| **Document hashes** (`DataKey::Doc(ProposalKind, u32)`) | Persistent | `Bytes` | View: `get_document(kind, id)` | Attached IPFS CIDs or sha256 content hashes. |
+| **ID sequence counters** (`NextProposalId`, `NextTreasuryId`) | Instance | `u32` | Internal counters | Seed on new contract as `max(existing_ids) + 1` to prevent ID collisions. |
+
+One structural note that falls out of this table: **the member-address set, extra token additions, and every loan/proposal/name/doc id must come from the event log or enumeration views**, because contract storage keys without views cannot be scanned on-chain. If `ourdao-backend` has not been running continuously since deployment, this procedure cannot be completed — see the RPC caveat below.
 
 > Public Soroban RPC retains only ~24h of ledger history. "Just replay the event log" is only possible because `ourdao-backend` has (assumed) been indexing continuously since deployment into its own durable store — RPC itself is not that store.
 
@@ -81,6 +106,9 @@ fn seed_pending_yield(env: Env, caller: Address, yields: Vec<(Address, i128)>) -
 fn seed_loans(env: Env, caller: Address, loans: Vec<Loan>) -> Result<(), Error>
 fn seed_names(env: Env, caller: Address, names: Vec<(String, Address)>) -> Result<(), Error>
 fn seed_docs(env: Env, caller: Address, docs: Vec<(ProposalKind, u32, Bytes)>) -> Result<(), Error>
+fn seed_whitelisted_tokens(env: Env, caller: Address, tokens: Vec<Address>) -> Result<(), Error>
+fn seed_delegations(env: Env, caller: Address, delegations: Vec<(Address, Address)>) -> Result<(), Error>
+fn seed_member_loan_stats(env: Env, caller: Address, stats: Vec<(Address, MemberLoanStats)>) -> Result<(), Error>
 fn lock_seeding(env: Env, caller: Address) -> Result<(), Error>
 ```
 
