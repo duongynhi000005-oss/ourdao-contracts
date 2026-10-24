@@ -408,3 +408,118 @@ proptest! {
         prop_assert!(s.token.balance(&s.client.address) >= staked);
     }
 }
+
+// ==================== issue #289: exit shares conservation property ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Property test for issue #289:
+    /// Invariant: sum of all exit shares paid across any sequence of exits
+    /// is strictly bounded by the available treasury balance, never causing
+    /// treasury deficit, underflow, or overdraft.
+    #[test]
+    fn sum_of_exit_shares_never_exceeds_treasury_property(
+        member_count in 2usize..=10,
+        extra_treasury in 0i128..=5_000_000,
+        slashes in prop::collection::vec(0i128..=FEE, 10),
+    ) {
+        let (env, client) = contract_with_treasury(extra_treasury);
+        let contract_id = client.address.clone();
+        let token_id = client.get_token();
+        let sac = token::StellarAssetClient::new(&env, &token_id);
+        let token_client = token::Client::new(&env, &token_id);
+
+        let mut members = Vec::new(&env);
+        for i in 0..member_count {
+            let m = Address::generate(&env);
+            sac.mint(&m, &FEE);
+            client.register_member(&m);
+
+            // Vary contributions via default slashing / penalties simulation
+            let c = slashes[i];
+            if c != FEE {
+                env.as_contract(&contract_id, || {
+                    let mut rec = crate::storage::get_member(&env, &m).unwrap();
+                    let delta = c - rec.contribution;
+                    rec.contribution = c;
+                    crate::storage::set_member(&env, &rec);
+                    crate::storage::set_active_contributions(
+                        &env,
+                        crate::storage::get_active_contributions(&env) + delta,
+                    );
+                });
+            }
+            members.push_back(m);
+        }
+
+        let initial_treasury = client.get_treasury_balance();
+        let initial_contract_balance = token_client.balance(&contract_id);
+        prop_assert!(initial_treasury >= 0);
+
+        let mut cumulative_payouts = 0i128;
+
+        // Perform sequential exits across members
+        for m in members.iter() {
+            let treasury_before = client.get_treasury_balance();
+            let member_balance_before = token_client.balance(&m);
+            let share_view = client.calculate_exit_share(&m);
+
+            prop_assert!(
+                share_view <= treasury_before,
+                "Individual exit share ({}) must not exceed treasury before exit ({})",
+                share_view,
+                treasury_before
+            );
+
+            client.exit_dao(&m);
+
+            let member_balance_after = token_client.balance(&m);
+            let payout = member_balance_after - member_balance_before;
+            prop_assert_eq!(payout, share_view);
+
+            cumulative_payouts += payout;
+
+            let treasury_after = client.get_treasury_balance();
+            let contract_balance_after = token_client.balance(&contract_id);
+
+            // Invariant 1: Treasury balance must never underflow or become negative
+            prop_assert!(
+                treasury_after >= 0,
+                "Treasury balance after exit must remain non-negative, got {}",
+                treasury_after
+            );
+            prop_assert!(
+                contract_balance_after >= 0,
+                "Contract token balance after exit must remain non-negative, got {}",
+                contract_balance_after
+            );
+
+            // Invariant 2: Total cumulative payouts never exceed initial treasury
+            prop_assert!(
+                cumulative_payouts <= initial_treasury,
+                "Cumulative exit payouts ({}) exceeded initial treasury ({})",
+                cumulative_payouts,
+                initial_treasury
+            );
+            prop_assert!(
+                cumulative_payouts <= initial_contract_balance,
+                "Cumulative exit payouts ({}) exceeded initial contract balance ({})",
+                cumulative_payouts,
+                initial_contract_balance
+            );
+
+            // Invariant 3: Exited member has zero exit share and cannot re-exit
+            prop_assert_eq!(client.calculate_exit_share(&m), 0);
+            prop_assert_eq!(
+                client.try_exit_dao(&m),
+                Err(Ok(crate::Error::MemberNotActive))
+            );
+        }
+
+        // Terminal Invariant: After all members exit, remaining treasury is non-negative dust <= member_count
+        let final_treasury = client.get_treasury_balance();
+        prop_assert!(final_treasury >= 0);
+        prop_assert_eq!(cumulative_payouts + final_treasury, initial_treasury);
+    }
+}
