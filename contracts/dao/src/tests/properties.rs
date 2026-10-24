@@ -202,6 +202,73 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// Issue #294: Distributed interest conservation.
+    /// Across arbitrary sequential interest distributions and arbitrary member claim
+    /// patterns, the pull-based accumulator with `YieldRemainder` conserves tokens exactly:
+    /// total_distributed_interest == total_claimed + total_pending + yield_remainder.
+    #[test]
+    fn distributed_interest_equals_claimed_plus_pending_plus_remainder(
+        active in 1u32..=6,
+        distributions in prop::collection::vec(1i128..=1_000_000_000, 1..=5),
+        claim_mask in prop::collection::vec(prop::collection::vec(any::<bool>(), 1..=6), 1..=5),
+    ) {
+        let (env, client) = contract_with_treasury(0);
+        let contract_id = client.address.clone();
+        let token_id = client.get_token();
+        let sac = token::StellarAssetClient::new(&env, &token_id);
+
+        let mut members = Vec::new(&env);
+        for _ in 0..active {
+            let m = Address::generate(&env);
+            sac.mint(&m, &FEE);
+            client.register_member(&m);
+            members.push_back(m);
+        }
+
+        let mut total_distributed = 0i128;
+        let mut total_claimed = 0i128;
+
+        for (step_idx, &interest) in distributions.iter().enumerate() {
+            total_distributed += interest;
+            // Fund the contract treasury with the received interest
+            sac.mint(&contract_id, &interest);
+
+            env.as_contract(&contract_id, || {
+                let _ = crate::loans::distribute_interest(&env, interest, &token_id);
+            });
+
+            // Randomly claim for some members after this distribution
+            if let Some(mask) = claim_mask.get(step_idx) {
+                for (idx, m) in members.iter().enumerate() {
+                    let should_claim = mask.get(idx % mask.len()).copied().unwrap_or(false);
+                    if should_claim && client.get_pending_yield(&m) > 0 {
+                        let claimed = client.claim_rewards(&m);
+                        total_claimed += claimed;
+                    }
+                }
+            }
+        }
+
+        let mut total_pending = 0i128;
+        for m in members.iter() {
+            total_pending += client.get_pending_yield(&m);
+        }
+
+        let remainder = env.as_contract(&contract_id, || {
+            crate::storage::get_yield_remainder(&env)
+        });
+
+        prop_assert_eq!(
+            total_distributed,
+            total_claimed + total_pending + remainder,
+            "Total distributed interest must exactly equal total claimed + total pending + yield remainder"
+        );
+    }
+}
+
+proptest! {
     #![proptest_config(ProptestConfig::with_cases(20))]
 
     /// `calculate_exit_share` is a pro-rata slice of the treasury.
