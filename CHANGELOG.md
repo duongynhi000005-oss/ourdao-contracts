@@ -11,6 +11,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Extended docs/THREAT_MODEL.md with emergency pauser actor trust boundaries, rogue pauser DoS mitigations (#319, #184), and multi-token whitelist threat analyses including premature removal guards (#272, #273), base token permanence (#274), and fee-on-transfer risks (#283) (#263).
 - `docs/events.schema.json`: machine-readable event schema covering all contract event topics (#344).
 - `treasury::tally` and `loans::vote_on_loan_proposal` read the active-member count (and policy/threshold) once per call (#355).
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).
