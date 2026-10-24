@@ -1,0 +1,68 @@
+name: Wave task
+description: Structured task template for Stellar Wave bounties and contributor assignments
+title: ''
+labels: ['stellar-wave', 'task']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing to OurDAO through the Stellar Wave program!
+        Please fill out each section below to define a clear, scoped task.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What is the background, problem, or motivation for this task?
+      placeholder: Describe the context, prior PRs, or problem statement...
+    validations:
+      required: true
+  - type: textarea
+    id: files-to-change
+    attributes:
+      label: Files to change
+      description: Which files or modules are in scope?
+      placeholder: |
+        - contracts/dao/src/...
+        - docs/...
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: Granular checklist of deliverables.
+      value: |
+        - [ ] Task item
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Objective, verifiable criteria for completing this task.
+      value: |
+        - [ ] All tests pass 100%
+        - [ ] `make ci` passes locally (fmt, clippy, test, build)
+    validations:
+      required: true
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Difficulty
+      description: Estimated difficulty level of the task.
+      options:
+        - easy
+        - medium
+        - hard
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ### How to submit
+        - One issue per PR. Branch name: `fix/issue-<number>-short-slug` (or `feat/...`, `docs/...`, `test/...`).
+        - Run `make ci` locally before pushing; all CI checks must be green.
+        - Add an entry under **Unreleased** in `CHANGELOG.md` (code changes).
+        - Do not renumber error codes or rename event topics — they are public ABI.
+        - Put `Closes #<this issue>` in the PR description.

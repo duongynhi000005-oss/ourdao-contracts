@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing Guidelines
+    url: https://github.com/ourdao/ourdao-contracts/blob/main/CONTRIBUTING.md
+    about: Read our contributing guide before opening a pull request or claiming an issue.
+  - name: Security Vulnerability Reporting
+    url: https://github.com/ourdao/ourdao-contracts/blob/main/SECURITY.md
+    about: Report security vulnerabilities privately following our coordinated disclosure policy.
