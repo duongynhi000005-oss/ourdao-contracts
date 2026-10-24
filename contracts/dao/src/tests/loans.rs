@@ -1939,3 +1939,86 @@ fn loan_lifecycle_in_second_asset() {
     assert_eq!(asset.balance(&v1), claimed);
     assert_eq!(s.token.balance(&v1), initial_v1_base);
 }
+
+// ==================== issue #287: default and slashing in second asset ====================
+
+#[test]
+fn default_in_second_asset() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let asset = whitelist_second_asset(&s, 10_000);
+    let initial_base_treasury = s.client.get_treasury_balance();
+    let initial_borrower_base = s.token.balance(&borrower);
+    let initial_v1_base = s.token.balance(&v1);
+
+    let member_before = s.client.get_member(&borrower).unwrap();
+    let initial_contribution = member_before.contribution;
+    assert_eq!(initial_contribution, FEE);
+    assert!(!member_before.has_active_loan);
+
+    // 1. Borrower requests loan of 2,000 in asset B
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &2_000, &asset.address, &None);
+
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    // Loan is active and disbursed in asset B
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+    assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
+    assert_eq!(asset.balance(&borrower), 2_000);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        8_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+
+    // Cannot mark defaulted before due time
+    let premature = s.client.try_mark_loan_defaulted(&pid);
+    assert_eq!(premature, Err(Ok(Error::LoanNotOverdue)));
+
+    // 2. Advance time past due_time + default_grace_period
+    advance(&s.env, LOAN_DURATION + 1);
+
+    // 3. Trigger default
+    s.client.mark_loan_defaulted(&pid);
+
+    // 4. Verify loan state
+    let defaulted_loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(defaulted_loan.status, LoanStatus::Defaulted);
+
+    // Cannot re-default
+    let re_default = s.client.try_mark_loan_defaulted(&pid);
+    assert_eq!(re_default, Err(Ok(Error::LoanNotActive)));
+
+    // 5. Verify slashing: penalty is slashed from the borrower's base-token contribution
+    let member_after = s.client.get_member(&borrower).unwrap();
+    assert!(!member_after.has_active_loan);
+    assert_eq!(member_after.active_loans, 0);
+    assert_eq!(member_after.repaid_loans, 0); // Not incremented on default
+
+    // default_penalty_bps = 2_000 (20%).
+    // Ceil rounding: (initial_contribution * 2000 + 10000 - 1) / 10000.
+    let expected_penalty = (initial_contribution * 2_000 + 10_000 - 1) / 10_000;
+    assert_eq!(
+        member_after.contribution,
+        initial_contribution - expected_penalty
+    );
+
+    // 6. Verify balance integrity: asset B and base balances remain intact
+    assert_eq!(asset.balance(&borrower), 2_000);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        8_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(s.token.balance(&v1), initial_v1_base);
+}

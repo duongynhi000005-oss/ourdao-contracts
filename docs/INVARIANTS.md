@@ -98,6 +98,21 @@ Tracking issue: open as follow-up (#134).
 
 ---
 
+
+### L5 — Default slashing for multi-asset loans slashes base contribution
+**Statement:** When a loan denominated in any asset (base token or secondary asset)
+defaults, the slashing penalty (default_penalty_bps, 20% ceil-rounded) is calculated
+from and deducted exclusively from the borrower's base-token membership contribution
+(member.contribution). Active contributions (ctive_contributions) are reduced by
+this penalty, and accrued base-token yield snapshot is advanced (forfeiting uncollected yield).
+The treasury balance of the secondary asset is unaffected at default time, and no
+secondary asset balance is deducted from the borrower.
+
+**Tested:** ✅ 	ests::loans::default_in_second_asset
+(contracts/dao/src/tests/loans.rs)
+
+---
+
 ## Governance invariants
 
 ### G1 — Voting weight stays in `[1, 6]`
