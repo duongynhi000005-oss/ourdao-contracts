@@ -232,7 +232,7 @@ pub fn pause(env: &Env, caller: Address) -> Result<(), Error> {
     }
     storage::set_paused(env, true);
     extend_instance(env);
-    env.events().publish((symbol_short!("paused"),), (caller));
+    env.events().publish((symbol_short!("paused"),), caller);
     Ok(())
 }
 
@@ -244,7 +244,7 @@ pub fn unpause(env: &Env, caller: Address) -> Result<(), Error> {
     }
     storage::set_paused(env, false);
     extend_instance(env);
-    env.events().publish((symbol_short!("unpaused"),), (caller));
+    env.events().publish((symbol_short!("unpaused"),), caller);
     Ok(())
 }
 

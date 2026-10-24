@@ -224,9 +224,71 @@ Numeric codes are stable and part of the ABI — new variants get appended rathe
 | 20–21 | Membership: `MemberNotActive`, `HasActiveLoan` |
 | 30–42 | Loans: `ProposalNotFound`, `NotBorrower`, `NotInEditingPhase`, `NotInVotingPhase`, `VotingEnded`, `AlreadyVoted`, `NotEligibleForLoan`, `CooldownActive`, `LoanNotFound`, `LoanNotActive`, `ExceedsTreasuryRatio`, `InsufficientTreasury`, `LoanNotOverdue` |
 | 50 | Treasury: `TreasuryProposalNotFound` |
-| 60–67 | Native-swap modules: `NameTaken`, `NameNotFound`, `NoStake`, `InsufficientStake`, `NoCommitment`, `CommitmentMismatch`, `AlreadyRevealed`, `NothingToClaim` |
-| 70–72 | Appended: `ProposalNotExpired`, `InvalidName`, `NotYetRevealed` |
+| 60–67 | Staking, privacy & names: `NameTaken`, `NameNotFound`, `NoStake`, `InsufficientStake`, `NoCommitment`, `CommitmentMismatch`, `AlreadyRevealed`, `NothingToClaim` |
+| 70–74 | Documents & proposals: `ProposalNotExpired`, `InvalidName`, `NotYetRevealed`, `NotProposalOwner`, `DocumentTooLarge` |
+| 75–80 | Governance & delegation: `InvalidToken`, `TimelockNotExpired`, `NoPendingPolicy`, `InvalidMetadataCid`, `InvalidDelegation`, `InvalidProposal` |
+| 81–82 | Emergency pauser: `AlreadyPauser`, `NotPauser` |
 | 83–87 | Multi-token treasury: `TokenNotWhitelisted`, `TokenAlreadyWhitelisted`, `NoPendingTokenAddition`, `AssetMismatch`, `CannotRemoveBaseToken` |
+
+### Complete Error Reference
+
+| Code | Variant | Module / Context | Description |
+|---|---|---|---|
+| 1 | `AlreadyInitialized` | Lifecycle | Contract has already been initialized |
+| 2 | `NotInitialized` | Lifecycle | Contract has not yet been initialized |
+| 3 | `InvalidThreshold` | Config | Quorum or consensus threshold is outside valid basis-points bounds |
+| 4 | `InvalidAmount` | Accounting | Amount provided is zero or negative |
+| 5 | `InvalidLoanPolicy` | Loans | Loan policy parameters violate constraints |
+| 6 | `Paused` | Admin | Contract is currently paused by admin or emergency pauser |
+| 7 | `NotPaused` | Admin | Attempted to unpause a contract that is not paused |
+| 10 | `NotAuthorized` | Auth | Caller is not authorized to execute this action |
+| 11 | `NotAdmin` | Auth | Caller is not in the admin set |
+| 12 | `NotMember` | Membership | Caller is not a registered member of the DAO |
+| 13 | `AlreadyAdmin` | Admin | Address is already an admin |
+| 14 | `AlreadyMember` | Membership | Address is already a registered member |
+| 15 | `CannotRemoveLastAdmin` | Admin | Cannot remove the sole remaining admin in the DAO |
+| 20 | `MemberNotActive` | Membership | Member status is exited, inactive, or not active |
+| 21 | `HasActiveLoan` | Loans | Member already has an active or outstanding loan |
+| 30 | `ProposalNotFound` | Loans | Loan proposal ID does not exist |
+| 31 | `NotBorrower` | Loans | Caller is not the borrower/proposer of the loan proposal |
+| 32 | `NotInEditingPhase` | Loans | Proposal editing period has closed |
+| 33 | `NotInVotingPhase` | Loans | Proposal is not currently open for voting |
+| 34 | `VotingEnded` | Loans | Voting period has ended for this proposal |
+| 35 | `AlreadyVoted` | Loans / Governance | Voter has already cast a vote on this proposal |
+| 36 | `NotEligibleForLoan` | Loans | Member is not eligible to borrow |
+| 37 | `CooldownActive` | Loans | Borrowing cooldown period after previous loan repayment is still active |
+| 38 | `LoanNotFound` | Loans | Loan ID does not exist |
+| 39 | `LoanNotActive` | Loans | Loan is not in active status (already repaid or defaulted) |
+| 40 | `ExceedsTreasuryRatio` | Loans | Requested loan amount exceeds the maximum loan-to-treasury ratio |
+| 41 | `InsufficientTreasury` | Treasury | Treasury balance is insufficient to disburse loan or withdrawal |
+| 42 | `LoanNotOverdue` | Loans | Loan has not exceeded due date plus grace period |
+| 50 | `TreasuryProposalNotFound` | Treasury | Treasury withdrawal proposal ID does not exist |
+| 60 | `NameTaken` | Registry | Requested handle/name is already registered by another address |
+| 61 | `NameNotFound` | Registry | Reserved: handle/name is not found in registry |
+| 62 | `NoStake` | Staking | Member has no tokens staked in the DAO |
+| 63 | `InsufficientStake` | Staking | Unstake amount exceeds member's currently staked balance |
+| 64 | `NoCommitment` | Privacy | Voter has no prior commitment recorded for this private vote |
+| 65 | `CommitmentMismatch` | Privacy | Revealed vote parameters do not match the sha256 commitment hash |
+| 66 | `AlreadyRevealed` | Privacy | Voter has already revealed their committed vote |
+| 67 | `NothingToClaim` | Staking | No staking rewards or yield available to claim |
+| 70 | `ProposalNotExpired` | Loans | Proposal voting window has not yet passed |
+| 71 | `InvalidName` | Registry | Name format is invalid (length, uppercase, or invalid separators) |
+| 72 | `NotYetRevealed` | Privacy | Cannot finalize proposal before the commit-reveal phase completes |
+| 73 | `NotProposalOwner` | Docs | Caller is not the proposal borrower/proposer and cannot modify attached document |
+| 74 | `DocumentTooLarge` | Docs | Attached document content hash or CID exceeds size limit |
+| 75 | `InvalidToken` | Admin | Token address passed to `initialize` does not implement token interface |
+| 76 | `TimelockNotExpired` | Admin | Timelock delay (48h) has not expired for policy or token proposal |
+| 77 | `NoPendingPolicy` | Admin | No policy update proposal is currently pending execution |
+| 78 | `InvalidMetadataCid` | Loans | Proposal metadata CID is empty or invalid |
+| 79 | `InvalidDelegation` | Governance | Invalid voting delegation target (e.g. self-delegation) |
+| 80 | `InvalidProposal` | Treasury | Treasury proposal parameters invalid (e.g. contract self-destination) |
+| 81 | `AlreadyPauser` | Admin | Address is already granted emergency pauser role |
+| 82 | `NotPauser` | Admin | Address does not hold emergency pauser role |
+| 83 | `TokenNotWhitelisted` | Whitelist | Asset is not on the treasury whitelist |
+| 84 | `TokenAlreadyWhitelisted` | Whitelist | Asset is already present on the treasury whitelist |
+| 85 | `NoPendingTokenAddition` | Whitelist | No addition proposal is pending for this asset |
+| 86 | `AssetMismatch` | Loans | Repayment asset does not match the asset the loan was issued in |
+| 87 | `CannotRemoveBaseToken` | Whitelist | The base token configured at initialization cannot be removed |
 
 ## Build & test
 
