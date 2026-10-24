@@ -1,0 +1,39 @@
+name: Changelog Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for skip-changelog label
+        id: check_label
+        run: |
+          if echo "${{ toJson(github.event.pull_request.labels.*.name) }}" | grep -q "skip-changelog"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip-changelog label detected; skipping changelog requirement."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check_label.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Verify CHANGELOG updated for contracts changes
+        if: steps.check_label.outputs.skip != 'true'
+        run: |
+          CHANGED_FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          CONTRACTS_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^contracts/' || true)
+          CHANGELOG_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^CHANGELOG\.md$' || true)
+
+          if [ -n "$CONTRACTS_CHANGED" ] && [ -z "$CHANGELOG_CHANGED" ]; then
+            echo "::error::PR modifies files under contracts/ without updating CHANGELOG.md."
+            echo "Please add a description of your contract changes under ## [Unreleased] in CHANGELOG.md, or request maintainers to attach the 'skip-changelog' label."
+            exit 1
+          fi
+
+          echo "CHANGELOG check passed successfully."
