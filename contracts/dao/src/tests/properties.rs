@@ -1,6 +1,6 @@
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env, Vec};
+use soroban_sdk::{token, Address, Env, String, Vec};
 
 use super::common::*;
 use crate::util::{MAX_STAKE_BONUS, STAKE_WEIGHT_UNIT};
@@ -241,5 +241,170 @@ proptest! {
         let treasury = client.get_treasury_balance();
         let sum: i128 = members.iter().map(|m| client.calculate_exit_share(&m)).sum();
         prop_assert!(sum <= treasury);
+    }
+}
+
+// ==================== issue #290: staked funds are never lendable ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(25))]
+
+    /// Staked funds are never lendable (#290):
+    /// 1. `get_treasury_balance()` strictly excludes `TotalStaked`.
+    /// 2. Loans exceeding net treasury ratio are rejected with `ExceedsTreasuryRatio`.
+    /// 3. After disbursing an approved loan, the contract's actual token balance
+    ///    remains strictly `>= TotalStaked`.
+    /// 4. When lendable treasury is exhausted, loan disbursement fails with
+    ///    `InsufficientTreasury`, strictly protecting staked tokens from disbursement
+    ///    even when raw token balance has sufficient funds.
+    #[test]
+    fn staked_funds_are_never_lendable_property(
+        extra_treasury in 1_000i128..=5_000_000,
+        stakes in prop::collection::vec(100i128..=200_000, 2..=3),
+        ratio_bps in 500u32..=5_000u32,
+    ) {
+        let s = setup(3);
+        let token_mint = token::StellarAssetClient::new(&s.env, &s.token.address);
+        if extra_treasury > 0 {
+            token_mint.mint(&s.client.address, &extra_treasury);
+        }
+
+        let mut total_staked = 0i128;
+        for (i, &amt) in stakes.iter().enumerate() {
+            let m = s.members.get(i as u32).unwrap();
+            token_mint.mint(&m, &amt);
+            s.client.stake(&m, &amt);
+            total_staked += amt;
+        }
+
+        // Simulate token backing for stakes held in DAO custody
+        token_mint.mint(&s.client.address, &total_staked);
+
+        let initial_fee_treasury = 3 * FEE;
+        let expected_net_treasury = initial_fee_treasury + extra_treasury;
+        let actual_token_balance = s.token.balance(&s.client.address);
+        prop_assert_eq!(actual_token_balance, expected_net_treasury + total_staked);
+
+        // Invariant 1: get_treasury_balance strictly excludes TotalStaked
+        let spendable_treasury = s.client.get_treasury_balance();
+        prop_assert_eq!(spendable_treasury, expected_net_treasury);
+        prop_assert!(spendable_treasury < actual_token_balance);
+
+        let borrower = s.members.get(0).unwrap();
+        let v1 = s.members.get(1).unwrap();
+        let v2 = s.members.get(2).unwrap();
+
+        // Max allowed loan under policy (50% max_loan_to_treasury_ratio)
+        let max_allowed = (spendable_treasury * 5_000) / crate::types::BASIS_POINTS;
+
+        // Invariant 2: Sizing loan against actual_token_balance (consuming stake) is rejected
+        let illegitimate_amount = ((actual_token_balance * 5_000) / crate::types::BASIS_POINTS).max(max_allowed + 1);
+        if illegitimate_amount > max_allowed {
+            let res = s.client.try_request_loan(&borrower, &illegitimate_amount, &None);
+            prop_assert_eq!(res, Err(Ok(crate::Error::ExceedsTreasuryRatio)));
+        }
+
+        // Invariant 3: Valid loan within spendable reserves disburses without touching stake
+        let valid_loan_amount = ((spendable_treasury * ratio_bps as i128) / crate::types::BASIS_POINTS).max(1);
+        if valid_loan_amount <= max_allowed {
+            let pid = s.client.request_loan(&borrower, &valid_loan_amount, &None);
+            advance(&s.env, EDITING + 1);
+
+            s.client.vote_on_loan_proposal(&v1, &pid, &true);
+            let p_check = s.client.get_loan_proposal(&pid).unwrap();
+            if p_check.status == crate::types::ProposalStatus::Pending {
+                s.client.vote_on_loan_proposal(&v2, &pid, &true);
+            }
+
+            let loan_prop = s.client.get_loan_proposal(&pid).unwrap();
+            prop_assert_eq!(loan_prop.status, crate::types::ProposalStatus::Approved);
+
+            // Invariant 4: Token balance after disbursement strictly protects staked funds
+            let balance_after = s.token.balance(&s.client.address);
+            prop_assert!(
+                balance_after >= total_staked,
+                "DAO token balance ({}) fell below total_staked ({})",
+                balance_after,
+                total_staked
+            );
+            prop_assert_eq!(
+                balance_after,
+                actual_token_balance - valid_loan_amount,
+                "Disbursement must only deduct the requested loan amount"
+            );
+            prop_assert_eq!(
+                balance_after,
+                total_staked + (expected_net_treasury - valid_loan_amount),
+                "Remaining balance must equal total_staked plus remaining spendable reserves"
+            );
+        }
+    }
+
+    /// Loan disbursement strictly fails if it would consume stake (#290 acceptance criteria)
+    #[test]
+    fn loan_disbursement_never_consumes_staked_funds(
+        raw_treasury in 2_000i128..=500_000,
+        staked in 500i128..=200_000,
+    ) {
+        let s = setup(3);
+        let token_mint = token::StellarAssetClient::new(&s.env, &s.token.address);
+        token_mint.mint(&s.client.address, &raw_treasury);
+
+        let staker = s.members.get(1).unwrap();
+        token_mint.mint(&staker, &staked);
+        s.client.stake(&staker, &staked);
+        token_mint.mint(&s.client.address, &staked);
+
+        let net_spendable = s.client.get_treasury_balance();
+        let total_raw = s.token.balance(&s.client.address);
+        prop_assert_eq!(total_raw, net_spendable + staked);
+
+        let borrower = s.members.get(0).unwrap();
+        let v1 = s.members.get(1).unwrap();
+        let v2 = s.members.get(2).unwrap();
+
+        // Request loan for max allowed ratio (50% of net_spendable)
+        let loan_amt = (net_spendable * 5_000) / crate::types::BASIS_POINTS;
+        let pid = s.client.request_loan(&borrower, &loan_amt, &None);
+
+        // Before loan voting, drain spendable treasury to an external destination
+        // so net_spendable drops below loan_amt, but total_raw STILL contains enough tokens from stake!
+        let drain_amt = net_spendable - loan_amt + 1; // leaving net_spendable = loan_amt - 1 < loan_amt
+        let dest = Address::generate(&s.env);
+        let reason = String::from_str(&s.env, "drain");
+        let t_pid = s.client.propose_treasury_withdrawal(&borrower, &drain_amt, &dest, &reason, &false);
+        s.client.vote_on_treasury_proposal(&borrower, &t_pid, &true);
+        let t_check = s.client.get_treasury_proposal(&t_pid).unwrap();
+        if t_check.status == crate::types::ProposalStatus::Pending {
+            s.client.vote_on_treasury_proposal(&v1, &t_pid, &true);
+        }
+
+        let net_spendable_now = s.client.get_treasury_balance();
+        prop_assert!(net_spendable_now < loan_amt);
+        // But raw tokens in DAO still exceed loan_amt because staked funds are present!
+        let raw_tokens_now = s.token.balance(&s.client.address);
+        prop_assert!(raw_tokens_now >= loan_amt);
+
+        // Advance to loan voting window
+        advance(&s.env, EDITING + 1);
+
+        // Voting passes, but disbursement MUST NOT consume the staked tokens!
+        s.client.vote_on_loan_proposal(&v1, &pid, &true);
+        let l_check = s.client.get_loan_proposal(&pid).unwrap();
+        if l_check.status == crate::types::ProposalStatus::Pending {
+            s.client.vote_on_loan_proposal(&v2, &pid, &true);
+        }
+
+        let prop = s.client.get_loan_proposal(&pid).unwrap();
+        // Since net spendable is insufficient, proposal goes to ApprovedPendingDisbursement
+        prop_assert_eq!(prop.status, crate::types::ProposalStatus::ApprovedPendingDisbursement);
+
+        // Attempting to disburse must fail with InsufficientTreasury
+        let disburse_res = s.client.try_disburse_approved_loan(&pid);
+        prop_assert_eq!(disburse_res, Err(Ok(crate::Error::InsufficientTreasury)));
+
+        // Total staked tokens remain 100% untouched
+        prop_assert_eq!(s.token.balance(&s.client.address), raw_tokens_now);
+        prop_assert!(s.token.balance(&s.client.address) >= staked);
     }
 }
