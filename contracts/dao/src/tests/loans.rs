@@ -1673,3 +1673,128 @@ fn repay_single_unit_stroops_partial_repayments_sum_to_exact_total() {
     assert_eq!(final_loan.amount_repaid, final_loan.total_repayment);
     assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
 }
+
+// ===========================================================================
+// Issue #299: Boundary tests at exactly the editing/voting/grace deadlines for loans
+// ===========================================================================
+
+#[test]
+fn test_loan_editing_period_boundaries() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let voter = s.members.get(1).unwrap();
+
+    // 1. Boundary: end - 1 (EDITING - 1)
+    let pid1 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING - 1);
+    // Proposal is still in editing phase
+    let vote_early = s.client.try_vote_on_loan_proposal(&voter, &pid1, &true);
+    assert_eq!(vote_early, Err(Ok(Error::NotInVotingPhase)));
+    // Cancel during editing succeeds
+    s.client.cancel_loan_proposal(&borrower, &pid1);
+    assert_eq!(
+        s.client.get_loan_proposal(&pid1).unwrap().status,
+        ProposalStatus::Cancelled
+    );
+
+    // 2. Boundary: exactly end (EDITING)
+    let pid2 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING);
+    // At now == editing_period_end, cancel is rejected (now >= editing_period_end)
+    let cancel_exact = s.client.try_cancel_loan_proposal(&borrower, &pid2);
+    assert_eq!(cancel_exact, Err(Ok(Error::NotInEditingPhase)));
+    // Voting is now open (refresh_phase transitions to Voting)
+    s.client.vote_on_loan_proposal(&voter, &pid2, &true);
+    let prop2 = s.client.get_loan_proposal(&pid2).unwrap();
+    assert_eq!(prop2.phase, ProposalPhase::Voting);
+    assert!(prop2.for_votes > 0);
+
+    // 3. Boundary: end + 1 (EDITING + 1)
+    let pid3 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING + 1);
+    let cancel_late = s.client.try_cancel_loan_proposal(&borrower, &pid3);
+    assert_eq!(cancel_late, Err(Ok(Error::NotInEditingPhase)));
+    s.client.vote_on_loan_proposal(&voter, &pid3, &true);
+    let prop3 = s.client.get_loan_proposal(&pid3).unwrap();
+    assert_eq!(prop3.phase, ProposalPhase::Voting);
+}
+
+#[test]
+fn test_loan_voting_period_boundaries() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let voter = s.members.get(1).unwrap();
+
+    // 1. Boundary: deadline - 1 (EDITING + VOTING_PERIOD - 1)
+    let pid1 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING + VOTING_PERIOD - 1);
+    s.client.vote_on_loan_proposal(&voter, &pid1, &true);
+    let exp1 = s.client.try_expire_loan_proposal(&pid1);
+    assert_eq!(exp1, Err(Ok(Error::ProposalNotExpired)));
+
+    // 2. Boundary: exactly deadline (EDITING + VOTING_PERIOD)
+    let pid2 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING + VOTING_PERIOD);
+    // Voting is closed at exact deadline (now >= deadline)
+    let vote_exact = s.client.try_vote_on_loan_proposal(&voter, &pid2, &true);
+    assert_eq!(vote_exact, Err(Ok(Error::VotingEnded)));
+    // Proposal expiration requires now > editing_period_end + voting_period
+    let exp2 = s.client.try_expire_loan_proposal(&pid2);
+    assert_eq!(exp2, Err(Ok(Error::ProposalNotExpired)));
+
+    // 3. Boundary: deadline + 1 (EDITING + VOTING_PERIOD + 1)
+    let pid3 = s.client.request_loan(&borrower, &300, &None);
+    advance(&s.env, EDITING + VOTING_PERIOD + 1);
+    let vote_late = s.client.try_vote_on_loan_proposal(&voter, &pid3, &true);
+    assert_eq!(vote_late, Err(Ok(Error::VotingEnded)));
+    // Expire succeeds at deadline + 1
+    s.client.expire_loan_proposal(&pid3);
+    let prop3 = s.client.get_loan_proposal(&pid3).unwrap();
+    assert_eq!(prop3.phase, ProposalPhase::Expired);
+    assert_eq!(prop3.status, ProposalStatus::Expired);
+}
+
+#[test]
+fn test_loan_default_grace_period_boundaries() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    // Configure a 1-day default grace period (86,400s)
+    let grace_period = 86_400u64;
+    let mut p = s.client.get_loan_policy();
+    p.default_grace_period = grace_period;
+    p.quorum_bps = 5_000;
+    s.client.propose_policy_update(&s.admin, &p);
+    advance(&s.env, TIMELOCK_DURATION + 1);
+    s.client.execute_policy_update(&s.admin);
+
+    // Request and approve a loan
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+    let due_time = loan.due_time;
+    let deadline = due_time + grace_period;
+
+    // Advance to deadline - 1
+    let now = s.env.ledger().timestamp();
+    advance(&s.env, deadline - now - 1);
+    let res_early = s.client.try_mark_loan_defaulted(&pid);
+    assert_eq!(res_early, Err(Ok(Error::LoanNotOverdue)));
+
+    // Advance to exactly deadline
+    advance(&s.env, 1);
+    s.client.mark_loan_defaulted(&pid);
+    let defaulted_loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(defaulted_loan.status, LoanStatus::Defaulted);
+
+    // Advance to deadline + 1: already defaulted
+    advance(&s.env, 1);
+    let res_late = s.client.try_mark_loan_defaulted(&pid);
+    assert_eq!(res_late, Err(Ok(Error::LoanNotActive)));
+}

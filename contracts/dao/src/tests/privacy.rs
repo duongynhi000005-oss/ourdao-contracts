@@ -215,3 +215,92 @@ fn copied_commitment_cannot_be_revealed_by_another_voter() {
     );
     s.client.reveal_treasury_vote(&first, &pid, &true, &salt);
 }
+
+// ===========================================================================
+// Issue #299: Boundary tests at exactly the commit/reveal deadlines
+// ===========================================================================
+
+#[test]
+fn test_privacy_commit_deadline_boundaries() {
+    let s = setup(4);
+    let proposer = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let v3 = s.members.get(3).unwrap();
+    let dest = Address::generate(&s.env);
+
+    let reason = String::from_str(&s.env, "private withdrawal");
+    let pid = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &300, &dest, &reason, &true);
+
+    let salt1 = BytesN::from_array(&s.env, &[11u8; 32]);
+    let salt2 = BytesN::from_array(&s.env, &[22u8; 32]);
+    let salt3 = BytesN::from_array(&s.env, &[33u8; 32]);
+    let c1 = compute_commitment(&s.env, &v1, pid, true, &salt1);
+    let c2 = compute_commitment(&s.env, &v2, pid, true, &salt2);
+    let c3 = compute_commitment(&s.env, &v3, pid, true, &salt3);
+
+    // 1. Boundary: commit_end - 1
+    advance(&s.env, VOTING_PERIOD - 1);
+    s.client.commit_treasury_vote(&v1, &pid, &c1);
+    let early_reveal = s.client.try_reveal_treasury_vote(&v1, &pid, &true, &salt1);
+    assert_eq!(early_reveal, Err(Ok(Error::NotYetRevealed)));
+
+    // 2. Boundary: exactly commit_end
+    advance(&s.env, 1);
+    s.client.commit_treasury_vote(&v2, &pid, &c2);
+    let exact_reveal = s.client.try_reveal_treasury_vote(&v2, &pid, &true, &salt2);
+    assert_eq!(exact_reveal, Err(Ok(Error::NotYetRevealed)));
+
+    // 3. Boundary: commit_end + 1
+    advance(&s.env, 1);
+    let late_commit = s.client.try_commit_treasury_vote(&v3, &pid, &c3);
+    assert_eq!(late_commit, Err(Ok(Error::VotingEnded)));
+
+    // Revealed vote succeeds in the reveal phase
+    s.client.reveal_treasury_vote(&v1, &pid, &true, &salt1);
+    assert!(s.client.has_voted(&ProposalKind::Treasury, &pid, &v1));
+}
+
+#[test]
+fn test_privacy_reveal_deadline_boundaries() {
+    let s = setup(4);
+    let proposer = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let v3 = s.members.get(3).unwrap();
+    let dest = Address::generate(&s.env);
+
+    let reason = String::from_str(&s.env, "private withdrawal");
+    let pid = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &300, &dest, &reason, &true);
+
+    let salt1 = BytesN::from_array(&s.env, &[41u8; 32]);
+    let salt2 = BytesN::from_array(&s.env, &[42u8; 32]);
+    let salt3 = BytesN::from_array(&s.env, &[43u8; 32]);
+    let c1 = compute_commitment(&s.env, &v1, pid, true, &salt1);
+    let c2 = compute_commitment(&s.env, &v2, pid, true, &salt2);
+    let c3 = compute_commitment(&s.env, &v3, pid, true, &salt3);
+
+    // Commit all votes during commit period
+    s.client.commit_treasury_vote(&v1, &pid, &c1);
+    s.client.commit_treasury_vote(&v2, &pid, &c2);
+    s.client.commit_treasury_vote(&v3, &pid, &c3);
+
+    // 1. Boundary: reveal_end - 1
+    advance(&s.env, 2 * VOTING_PERIOD - 1);
+    s.client.reveal_treasury_vote(&v1, &pid, &true, &salt1);
+    assert!(s.client.has_voted(&ProposalKind::Treasury, &pid, &v1));
+
+    // 2. Boundary: exactly reveal_end
+    advance(&s.env, 1);
+    s.client.reveal_treasury_vote(&v2, &pid, &true, &salt2);
+    assert!(s.client.has_voted(&ProposalKind::Treasury, &pid, &v2));
+
+    // 3. Boundary: reveal_end + 1
+    advance(&s.env, 1);
+    let late_reveal = s.client.try_reveal_treasury_vote(&v3, &pid, &true, &salt3);
+    assert_eq!(late_reveal, Err(Ok(Error::VotingEnded)));
+}

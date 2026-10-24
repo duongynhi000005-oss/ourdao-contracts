@@ -675,3 +675,85 @@ fn treasury_withdrawal_error_parity_across_entrypoints() {
         Err(Ok(Error::NotMember))
     );
 }
+
+// ===========================================================================
+// Issue #299: Boundary tests at exactly the editing/voting deadline for treasury
+// ===========================================================================
+
+#[test]
+fn test_treasury_editing_period_boundaries() {
+    let s = setup(3);
+    let proposer = s.members.get(0).unwrap();
+    let dest = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "grant");
+
+    // 1. Boundary: end - 1 (EDITING - 1)
+    let pid1 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, EDITING - 1);
+    s.client.cancel_treasury_proposal(&proposer, &pid1);
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid1).unwrap().status,
+        ProposalStatus::Cancelled
+    );
+
+    // 2. Boundary: exactly end (EDITING)
+    let pid2 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, EDITING);
+    s.client.cancel_treasury_proposal(&proposer, &pid2);
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid2).unwrap().status,
+        ProposalStatus::Cancelled
+    );
+
+    // 3. Boundary: end + 1 (EDITING + 1)
+    let pid3 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, EDITING + 1);
+    let res = s.client.try_cancel_treasury_proposal(&proposer, &pid3);
+    assert_eq!(res, Err(Ok(Error::NotInEditingPhase)));
+}
+
+#[test]
+fn test_treasury_voting_period_boundaries() {
+    let s = setup(3);
+    let proposer = s.members.get(0).unwrap();
+    let voter = s.members.get(1).unwrap();
+    let dest = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "grant");
+
+    // 1. Boundary: deadline - 1 (VOTING_PERIOD - 1)
+    let pid1 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, VOTING_PERIOD - 1);
+    s.client.vote_on_treasury_proposal(&voter, &pid1, &true);
+    let exp1 = s.client.try_expire_treasury_proposal(&pid1);
+    assert_eq!(exp1, Err(Ok(Error::NotInVotingPhase)));
+
+    // 2. Boundary: exactly deadline (VOTING_PERIOD)
+    let pid2 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, VOTING_PERIOD);
+    s.client.vote_on_treasury_proposal(&voter, &pid2, &true);
+    let exp2 = s.client.try_expire_treasury_proposal(&pid2);
+    assert_eq!(exp2, Err(Ok(Error::NotInVotingPhase)));
+
+    // 3. Boundary: deadline + 1 (VOTING_PERIOD + 1)
+    let pid3 = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &100, &dest, &reason, &false);
+    advance(&s.env, VOTING_PERIOD + 1);
+    let vote_late = s.client.try_vote_on_treasury_proposal(&voter, &pid3, &true);
+    assert_eq!(vote_late, Err(Ok(Error::NotInVotingPhase)));
+    s.client.expire_treasury_proposal(&pid3);
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid3).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
