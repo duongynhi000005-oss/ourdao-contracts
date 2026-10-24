@@ -186,7 +186,7 @@ proptest! {
 
         let asset = client.get_token();
         env.as_contract(&contract_id, || {
-            crate::loans::distribute_interest(&env, interest, &asset);
+            let _ = crate::loans::distribute_interest(&env, interest, &asset);
         });
 
         let per_member = interest / active as i128;

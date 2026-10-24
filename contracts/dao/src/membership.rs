@@ -57,7 +57,10 @@ pub fn register_member(env: &Env, member: Address) -> Result<(), Error> {
         storage::set_total_members(env, storage::get_total_members(env) + 1);
     }
     storage::set_active_members(env, storage::get_active_members(env) + 1);
-    storage::set_active_contributions(env, storage::get_active_contributions(env) + fee);
+    let new_active_contrib = storage::get_active_contributions(env)
+        .checked_add(fee)
+        .ok_or(Error::ArithmeticOverflow)?;
+    storage::set_active_contributions(env, new_active_contrib);
     extend_instance(env);
 
     // Interaction last (checks-effects-interactions): the fee transfer only
@@ -78,10 +81,13 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
         return Err(Error::HasActiveLoan);
     }
 
-    let share = calculate_exit_share(env, &member);
+    let share = calculate_exit_share(env, &member)?;
     let stake = storage::get_stake(env, &member);
-    let pending = compute_pending_yield(env, &member);
-    let payout = share + stake + pending;
+    let pending = compute_pending_yield(env, &member)?;
+    let payout = share
+        .checked_add(stake)
+        .and_then(|v| v.checked_add(pending))
+        .ok_or(Error::ArithmeticOverflow)?;
 
     // Issue #176: check the contract's actual token balance before attempting
     // the transfer so a temporarily depleted treasury returns a typed error
@@ -119,10 +125,10 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
     let exiting_contribution = record.contribution;
     storage::set_member(env, &record);
     storage::set_active_members(env, storage::get_active_members(env) - 1);
-    storage::set_active_contributions(
-        env,
-        storage::get_active_contributions(env) - exiting_contribution,
-    );
+    let new_active_contrib = storage::get_active_contributions(env)
+        .checked_sub(exiting_contribution)
+        .ok_or(Error::ArithmeticOverflow)?;
+    storage::set_active_contributions(env, new_active_contrib);
     extend_instance(env);
 
     // Interact only after all membership, stake and yield effects are written.
@@ -141,7 +147,7 @@ pub fn claim_rewards(env: &Env, member: Address) -> Result<i128, Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
     util::require_active_member(env, &member)?;
-    let pending = compute_pending_yield(env, &member);
+    let pending = compute_pending_yield(env, &member)?;
     if pending <= 0 {
         return Err(Error::NothingToClaim);
     }
@@ -161,23 +167,29 @@ pub fn claim_rewards(env: &Env, member: Address) -> Result<i128, Error> {
     Ok(pending)
 }
 
-fn share_from_contributions(treasury: i128, contribution: i128, total_contributions: i128) -> i128 {
+fn share_from_contributions(
+    treasury: i128,
+    contribution: i128,
+    total_contributions: i128,
+) -> Result<i128, Error> {
     if total_contributions <= 0 || treasury <= 0 || contribution <= 0 {
-        return 0;
+        return Ok(0);
     }
     // Member payout: floor-division rounds down to favour the treasury.
     // Sub-token remainders stay in the contract balance so exit shares never
     // exceed the treasury (Invariant A2).
-    treasury
+    let product = treasury
         .checked_mul(contribution)
-        .and_then(|v| v.checked_div(total_contributions))
-        .unwrap_or(0)
+        .ok_or(Error::ArithmeticOverflow)?;
+    product
+        .checked_div(total_contributions)
+        .ok_or(Error::ArithmeticOverflow)
 }
 
-pub fn calculate_exit_share(env: &Env, member: &Address) -> i128 {
+pub fn calculate_exit_share(env: &Env, member: &Address) -> Result<i128, Error> {
     let record = match storage::get_member(env, member) {
         Some(m) if m.status == MemberStatus::ActiveMember => m,
-        _ => return 0,
+        _ => return Ok(0),
     };
     let total_contributions = storage::get_active_contributions(env);
     let treasury = util::treasury_balance(env);
@@ -196,10 +208,11 @@ fn total_active_contributions(env: &Env) -> i128 {
 /// Single definition of a member's unclaimed yield. Used by `exit_dao`,
 /// `claim_rewards` and the public `get_pending_yield` view so the amount
 /// displayed is always the amount paid.
-pub(crate) fn compute_pending_yield(env: &Env, addr: &Address) -> i128 {
+pub(crate) fn compute_pending_yield(env: &Env, addr: &Address) -> Result<i128, Error> {
     let acc = storage::get_yield_accumulator(env);
     let snap = storage::get_yield_snapshot(env, addr);
-    (acc - snap).max(0)
+    let diff = acc.checked_sub(snap).ok_or(Error::ArithmeticOverflow)?;
+    Ok(diff.max(0))
 }
 
 /// Read-only aggregate of a member's record, stake, unclaimed yield, loan
@@ -208,6 +221,7 @@ pub(crate) fn compute_pending_yield(env: &Env, addr: &Address) -> i128 {
 /// is reported with its `Inactive` status.
 pub fn member_overview(env: &Env, member: &Address) -> Result<MemberOverview, Error> {
     let record = storage::get_member(env, member).ok_or(Error::NotMember)?;
+    let pending = compute_pending_yield(env, member)?;
     Ok(MemberOverview {
         loan_stats: MemberLoanStats {
             total_loans: record.total_loans,
@@ -215,7 +229,7 @@ pub fn member_overview(env: &Env, member: &Address) -> Result<MemberOverview, Er
             active_loans: record.active_loans,
         },
         stake: storage::get_stake(env, member),
-        pending_yield: compute_pending_yield(env, member),
+        pending_yield: pending,
         name: storage::get_name_of(env, member),
         delegate: storage::get_delegation(env, member),
         member: record,

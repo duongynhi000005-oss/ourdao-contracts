@@ -320,3 +320,38 @@ fn pending_yield_view_matches_claim_rewards_payout() {
     s.client.exit_dao(&v2);
     assert_eq!(s.token.balance(&v2) - before, share + shown);
 }
+
+// ===========================================================================
+// Issue #251: Checked arithmetic overflow in exit share & yield computation
+// ===========================================================================
+
+#[test]
+fn calculate_exit_share_overflow_returns_arithmetic_overflow() {
+    let s = rejecting_setup(1);
+    let member = s.members.get(0).unwrap();
+    // Treasury balance * contribution exceeds i128::MAX
+    s.token.mint(&s.client.address, &(i128::MAX / 500));
+    let res = s.client.try_calculate_exit_share(&member);
+    assert_eq!(res, Err(Ok(Error::ArithmeticOverflow)));
+}
+
+#[test]
+fn exit_dao_overflow_returns_arithmetic_overflow() {
+    let s = rejecting_setup(1);
+    let member = s.members.get(0).unwrap();
+    s.token.mint(&s.client.address, &(i128::MAX / 500));
+    let res = s.client.try_exit_dao(&member);
+    assert_eq!(res, Err(Ok(Error::ArithmeticOverflow)));
+}
+
+#[test]
+fn compute_pending_yield_overflow_returns_arithmetic_overflow() {
+    let s = setup(1);
+    let member = s.members.get(0).unwrap();
+    s.env.as_contract(&s.client.address, || {
+        crate::storage::set_yield_snapshot(&s.env, &member, 1);
+        crate::storage::set_yield_accumulator(&s.env, i128::MIN);
+        let res = crate::membership::compute_pending_yield(&s.env, &member);
+        assert_eq!(res, Err(Error::ArithmeticOverflow));
+    });
+}

@@ -1485,3 +1485,24 @@ fn loan_repayment_error_parity_across_entrypoints() {
         Err(Ok(Error::NotBorrower))
     );
 }
+
+// ===========================================================================
+// Issue #251: Checked arithmetic for overflow and typed ArithmeticOverflow
+// ===========================================================================
+
+#[test]
+fn calculate_loan_terms_overflow_returns_arithmetic_overflow() {
+    let s = setup(1);
+    let res = s.client.try_calculate_loan_terms(&i128::MAX);
+    assert_eq!(res, Err(Ok(Error::ArithmeticOverflow)));
+}
+
+#[test]
+fn distribute_interest_overflow_returns_arithmetic_overflow() {
+    let s = setup(1);
+    s.env.as_contract(&s.client.address, || {
+        crate::storage::set_yield_remainder(&s.env, i128::MAX - 10);
+        let res = crate::loans::distribute_interest(&s.env, 20, &s.token.address);
+        assert_eq!(res, Err(Error::ArithmeticOverflow));
+    });
+}

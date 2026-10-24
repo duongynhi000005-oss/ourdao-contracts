@@ -31,6 +31,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - Apply treasury-favouring rounding for debt and interest calculations; document every division (#325).
 - Added regression coverage that `reveal_vote` removes the stored commitment (#356).
 - Validate consensus/treasury thresholds and quorum_bps are within 1..=10000: reject zero quorum_bps in proposed policy updates and verify set_consensus_threshold bounds (#320).
+- Audit i128 arithmetic for overflow across membership and loan calculations, introducing typed `Error::ArithmeticOverflow` (#251).
 
 
 ### Added

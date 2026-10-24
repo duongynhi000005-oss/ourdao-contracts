@@ -573,7 +573,7 @@ impl OurDao {
     }
 
     pub fn get_pending_yield(env: Env, member: Address) -> i128 {
-        membership::compute_pending_yield(&env, &member)
+        membership::compute_pending_yield(&env, &member).unwrap_or(0)
     }
 
     /// Returns the address `delegator` has delegated their vote to, or `None`
@@ -603,12 +603,12 @@ impl OurDao {
 
     pub fn calculate_loan_terms(env: Env, amount: i128) -> Result<LoanTerms, Error> {
         util::require_initialized(&env)?;
-        Ok(loans::calculate_loan_terms(&env, amount))
+        loans::calculate_loan_terms(&env, amount)
     }
 
     pub fn calculate_exit_share(env: Env, member: Address) -> Result<i128, Error> {
         util::require_initialized(&env)?;
-        Ok(membership::calculate_exit_share(&env, &member))
+        membership::calculate_exit_share(&env, &member)
     }
 
     // ==================== paginated list views (#334 / #335) ====================
