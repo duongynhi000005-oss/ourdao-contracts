@@ -278,6 +278,20 @@ stellar contract build --optimize
 
 CI (`.github/workflows/ci.yml`) first runs a fast `check` job (`cargo check --locked --all-targets`) that the other build jobs depend on, then runs `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and the wasm build in one job on every push and PR. A separate `audit` job runs `cargo audit` on the same triggers — it's split out so a newly published advisory (which can land against a pin we already know about and can't move, like the one below) surfaces visibly without blocking merges on unrelated PRs.
 
+### Stateful random-sequence harness
+
+The stateful property test harness (`contracts/dao/src/tests/stateful.rs`) executes multi-step random action sequences across all DAO entrypoints (joins, exits, stakes, unstakes, loan requests, voting, full and partial repayments, loan defaults, treasury proposals and executions) and asserts universal system invariants after every single step.
+
+In CI, the test runs with 20 randomized cases (< 15 seconds). To run longer fuzzing sweeps locally, set `PROPTEST_CASES`:
+
+```bash
+# Standard stateful harness test
+cargo test tests::stateful
+
+# Extended local fuzzing with 500 cases
+PROPTEST_CASES=500 cargo test tests::stateful
+```
+
 > **Note on dependencies:** `Cargo.lock` pins `ed25519-dalek` to `2.2.0`. A newer
 > transitive release (`3.0.0`) is incompatible with the pinned `rand_core` used by
 > `soroban-env-host` and breaks the test build if allowed to float. The lockfile is

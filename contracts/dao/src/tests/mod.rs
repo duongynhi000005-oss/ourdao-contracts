@@ -10,6 +10,7 @@ mod privacy;
 mod properties;
 mod registry;
 mod staking;
+mod stateful;
 mod treasury;
 // mod issue310_snapshot;
 // mod issue311_budget;
