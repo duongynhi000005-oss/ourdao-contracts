@@ -21,6 +21,7 @@ Closes #<!-- issue number -->
 - [ ] `cargo fmt --all -- --check` passes
 - [ ] `cargo test --locked` passes
 - [ ] `cargo build --locked --target wasm32v1-none --release` succeeds
+- [ ] CI is green on the latest commit
 - [ ] This PR addresses a single issue only
 
 ## Contract checklist

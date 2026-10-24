@@ -127,6 +127,30 @@ sha256sum target/wasm32v1-none/release/ourdao_dao.optimized.wasm
 
 Deployed contract IDs for each network are documented in [DEPLOYMENTS.md](./DEPLOYMENTS.md).
 
+## Merging and required status checks
+
+To ensure contract stability and state integrity, `main` branch protection enforces that pull requests cannot be merged unless all status checks pass on the latest commit. Maintainers must never bypass required checks or merge branches with failing CI.
+
+### Required status checks
+
+The following status checks correspond to GitHub Actions jobs and steps in `.github/workflows/ci.yml` and must report green:
+
+1. **`check`**: `cargo check --locked --all-targets` (fast syntax and compilation validation).
+2. **`build-and-test / Format check`**: `cargo fmt --all -- --check` (code formatting standard).
+3. **`build-and-test / Clippy`**: `cargo clippy --all-targets --locked -- -D warnings` (strict linting with zero warnings).
+4. **`build-and-test / Test`**: `cargo test --locked` (full test suite execution).
+5. **`build-and-test / Test & Coverage`**: `cargo llvm-cov --locked --all-targets --html --fail-under-lines 95` (strictly enforces 95% line-coverage floor).
+6. **`build-and-test / Build wasm (release)`**: `cargo build --locked --target wasm32v1-none --release` (successful release wasm compilation).
+7. **`supply-chain / Reject known dependency advisories`**: `cargo audit` (known vulnerability screening).
+8. **`supply-chain / Check licenses, bans, advisories, and sources`**: `cargo deny` (license and supply chain verification).
+9. **`reproducible-build`**: `./scripts/build-reproducible.sh` (validates two isolated Docker builds yield byte-for-byte identical wasm artifacts).
+
+### Maintainer branch protection rules
+
+- **Require branch up-to-date before merging:** Pull request branches must be rebased on the latest `upstream/main` commit before merge.
+- **Require linear history:** Squashing or linear rebasing is required; merge commits (`Merge branch 'main'`) are rejected.
+- **No bypasses:** Even repository administrators must adhere to the required checks floor.
+
 ## What gets closed without review
 
 To keep review time going to real contributions, the following are closed on sight:
