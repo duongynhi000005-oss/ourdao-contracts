@@ -25,11 +25,12 @@ If you think something should change but there's no issue for it, open one and d
 
 ## Local setup
 
-You need a stable Rust toolchain (1.84 or newer — `soroban-sdk` requires the `wasm32v1-none` target, which older toolchains don't have):
+The repository includes a `rust-toolchain.toml` that pins the exact Rust version, components (`rustfmt`, `clippy`), and target (`wasm32v1-none`) required for building and testing. When using `rustup`, entering the directory will automatically select and configure the pinned toolchain.
 
+Alternatively, to configure manually:
 ```bash
 rustup target add wasm32v1-none
-rustup component add rustfmt
+rustup component add rustfmt clippy
 ```
 
 Then:

@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned so local development, CI, and reproducible builds use the same compiler.
+# Upstream Rust releases cannot trigger unexpected lint or formatting breakage.
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32v1-none"]
