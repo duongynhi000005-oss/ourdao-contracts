@@ -185,33 +185,47 @@ Every state-changing call publishes an event, which `ourdao-backend` indexes sin
 
 | Symbol | Data | Emitted by |
 |---|---|---|
-| `init` | `(admins, threshold, fee, token)` | `initialize` |
+| `init` | `(admins, consensus_threshold, membership_fee, token)` | `initialize` |
 | `admin_add` / `admin_rem` | `admin` | `add_admin` / `remove_admin` |
-| `threshold` | `threshold` | `set_consensus_threshold` |
-| `policy` / `paused` / `unpaused` | — | `set_loan_policy` / `pause` / `unpause` |
-| `joined` | `(member, fee)` | `register_member` |
-| `exited` | `(member, share)` | `exit_dao` |
-| `claimed` | `(member, pending)` | `claim_rewards` |
-| `loan_req` | `(id, borrower, amount, total_repayment)` | `request_loan` |
-| `loan_edit` | `(proposal_id, borrower, new_amount, total_repayment)` | `edit_loan_proposal` |
-| `loan_vote` | `(proposal_id, voter, support)` | `vote_on_loan_proposal` |
-| `loan_appr` | `(id, borrower, amount)` | auto-fired on approval — `id` is both the loan's and its proposal's id |
-| `loan_rpy` | `(loan_id, borrower, outstanding)` | `repay_loan` / `repay_loan_partial` — `outstanding` is the balance still remaining *after* this payment (0 for a payment that fully repays the loan) |
-| `loan_dflt` | `(loan_id, borrower, penalty)` | `mark_loan_defaulted` |
-| `loan_exp` | `(proposal_id, borrower)` | `expire_loan_proposal` (permissionless keeper) |
-| `interest` | `(interest, active_members)` | fired alongside `loan_rpy` |
-| `tre_prop` | `(id, amount, destination, private)` | `propose_treasury_withdrawal` |
-| `tre_vote` | `(id, voter, support)` | `vote_on_treasury_proposal` |
-| `tre_exec` | `(id, amount, destination)` | auto-fired on execution |
-| `loan_asst` / `tre_asset` | `(id, asset)` | `request_loan_in_asset` / `propose_withdrawal_in_asset`, only when `asset` isn't the base token |
-| `prop_canc` | `(proposal_id, timestamp)` | `cancel_loan_proposal` / `cancel_treasury_proposal` |
+| `pset` | `pauser` | `set_pauser` |
+| `prev` | `caller` | `revoke_pauser` |
+| `threshold` | `(old_threshold, threshold)` | `set_consensus_threshold` |
+| `pol_prop` | `(caller, execution_time)` | `propose_policy_update` |
+| `policy` | `(old_policy, new_policy)` | `execute_policy_update` |
+| `pol_canc` | `caller` | `cancel_policy_update` |
+| `paused` / `unpaused` | `caller` | `pause` / `unpause` |
 | `tok_prop` | `(caller, token, execution_time)` | `propose_token_addition` |
 | `tok_add` / `tok_rem` | `(caller, token)` | `execute_token_addition` / `remove_token` |
-| `staked` / `unstaked` | `(member, amount, new_stake)` | `stake` / `unstake` |
-| `name_reg` | `(name, owner)` | `register_name` |
+| `joined` | `(member, fee)` | `register_member` |
+| `exited` | `(member, share, pending)` | `exit_dao` |
+| `claimed` | `StakingRewardClaimed { member, amount, timestamp }` | `claim_rewards` — topics: `(claimed, member, pending)` |
+| `delegate` | `(delegator, delegatee)` | `delegate_vote` |
+| `staked` / `unstaked` | `(member, amount, new_stake, voting_weight)` | `stake` / `unstake` |
+| `loan_req` | `(id, borrower, amount, total_repayment)` | `request_loan` / `request_loan_in_asset` |
+| `loan_asst` | `(id, asset)` | `request_loan_in_asset`, only when `asset` is not the base token |
+| `loan_edit` | `(proposal_id, borrower, new_amount, total_repayment)` | `edit_loan_proposal` |
+| `prop_canc` | `(proposal_id, timestamp)` | `cancel_loan_proposal` / `cancel_treasury_proposal` |
+| `loan_vote` | `(proposal_id, voter, support)` | `vote_on_loan_proposal` |
+| `loan_wait` | `(id, amount)` | `vote_on_loan_proposal` — auto-fired when approved but treasury temporarily lacks liquidity (`ApprovedPendingDisbursement`) |
+| `loan_rej` | `(id, for_votes, against_votes)` | `vote_on_loan_proposal` — auto-fired when quorum is mathematically impossible |
+| `loan_appr` | `(id, borrower, amount, due_time)` | `vote_on_loan_proposal` — auto-fired on approval and principal disbursement |
+| `loan_partial_repaid` | `(borrower, amount)` | `repay_loan_partial` |
+| `loan_rpy` | `(loan_id, borrower, remaining)` | `repay_loan` / `repay_loan_partial` — `remaining` is the balance still outstanding after payment (0 when fully repaid) |
+| `loan_exp` | `(proposal_id, borrower)` | `expire_loan_proposal` (permissionless keeper) |
+| `loan_dflt` | `(loan_id, borrower, penalty)` | `mark_loan_defaulted` (permissionless keeper) |
+| `interest` | `(interest, active_members)` | fired alongside `loan_rpy` when distributing interest yield |
+| `tre_prop` | `(id, amount, destination, private)` | `propose_treasury_withdrawal` / `propose_withdrawal_in_asset` |
+| `tre_asset` | `(id, asset)` | `propose_withdrawal_in_asset`, only when `asset` is not the base token |
+| `tre_vote` | `(id, voter, support)` | `vote_on_treasury_proposal` / `tally` |
+| `tre_wait` | `(id, amount)` | `tally` — auto-fired when approved but treasury temporarily lacks liquidity (`ApprovedPendingDisbursement`) |
+| `tre_rej` | `(id, for_votes, against_votes)` | `tally` — auto-fired when quorum is mathematically impossible |
+| `tre_exec` | `(id, amount, destination)` | `tally` — auto-fired on treasury payout execution |
 | `committed` | `(proposal_id, voter)` | `commit_treasury_vote` |
 | `revealed` | `(proposal_id, voter, support)` | `reveal_treasury_vote` |
+| `name_reg` | `(name, owner)` | `register_name` |
+| `name_rel` | `(old_name, owner)` | `register_name` — emitted when releasing existing name to register a new one |
 | `doc_attn` | `(kind, proposal_id, caller)` | `attach_document` |
+| `TtlBumped` | `()` | `bump_dao_ttl` |
 
 ## Error codes
 
