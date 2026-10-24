@@ -100,7 +100,7 @@ pub fn initialize(
 
 #[allow(deprecated)]
 pub fn add_admin(env: &Env, caller: Address, admin: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     let mut admins = storage::get_admins(env);
     if admins.contains(&admin) {
         return Err(Error::AlreadyAdmin);
@@ -114,7 +114,7 @@ pub fn add_admin(env: &Env, caller: Address, admin: Address) -> Result<(), Error
 
 #[allow(deprecated)]
 pub fn remove_admin(env: &Env, caller: Address, admin: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     let mut admins = storage::get_admins(env);
     if admins.len() <= 1 {
         return Err(Error::CannotRemoveLastAdmin);
@@ -130,7 +130,7 @@ pub fn remove_admin(env: &Env, caller: Address, admin: Address) -> Result<(), Er
 
 #[allow(deprecated)]
 pub fn set_pauser(env: &Env, caller: Address, pauser: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if storage::get_pauser(env).as_ref() == Some(&pauser) {
         return Err(Error::AlreadyPauser);
     }
@@ -142,7 +142,7 @@ pub fn set_pauser(env: &Env, caller: Address, pauser: Address) -> Result<(), Err
 
 #[allow(deprecated)]
 pub fn revoke_pauser(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if storage::get_pauser(env).is_none() {
         return Err(Error::NotPauser);
     }
@@ -154,7 +154,7 @@ pub fn revoke_pauser(env: &Env, caller: Address) -> Result<(), Error> {
 
 #[allow(deprecated)]
 pub fn set_consensus_threshold(env: &Env, caller: Address, threshold: u32) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if threshold == 0 || threshold as i128 > BASIS_POINTS {
         return Err(Error::InvalidThreshold);
     }
@@ -168,7 +168,7 @@ pub fn set_consensus_threshold(env: &Env, caller: Address, threshold: u32) -> Re
 
 #[allow(deprecated)]
 pub fn propose_policy_update(env: &Env, caller: Address, policy: LoanPolicy) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     validate_policy(&policy)?;
     let now = env.ledger().timestamp();
     let execution_time = now + TIMELOCK_DURATION;
@@ -186,7 +186,7 @@ pub fn propose_policy_update(env: &Env, caller: Address, policy: LoanPolicy) -> 
 
 #[allow(deprecated)]
 pub fn execute_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     let update = storage::get_pending_policy_update(env).ok_or(Error::NoPendingPolicy)?;
     let now = env.ledger().timestamp();
     if now < update.execution_time {
@@ -203,7 +203,7 @@ pub fn execute_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
 
 #[allow(deprecated)]
 pub fn cancel_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if storage::get_pending_policy_update(env).is_none() {
         return Err(Error::NoPendingPolicy);
     }
@@ -223,28 +223,25 @@ pub fn set_policy(env: &Env, caller: Address, policy: LoanPolicy) -> Result<(), 
 
 #[allow(deprecated)]
 pub fn pause(env: &Env, caller: Address) -> Result<(), Error> {
-    caller.require_auth();
-    if !util::is_admin(env, &caller) && !util::is_pauser(env, &caller) {
-        return Err(Error::NotAdmin);
-    }
+    util::auth_pauser(env, &caller)?;
     if storage::is_paused(env) {
         return Err(Error::Paused);
     }
     storage::set_paused(env, true);
     extend_instance(env);
-    env.events().publish((symbol_short!("paused"),), (caller));
+    env.events().publish((symbol_short!("paused"),), caller);
     Ok(())
 }
 
 #[allow(deprecated)]
 pub fn unpause(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if !storage::is_paused(env) {
         return Err(Error::NotPaused);
     }
     storage::set_paused(env, false);
     extend_instance(env);
-    env.events().publish((symbol_short!("unpaused"),), (caller));
+    env.events().publish((symbol_short!("unpaused"),), caller);
     Ok(())
 }
 
@@ -257,7 +254,7 @@ pub fn unpause(env: &Env, caller: Address) -> Result<(), Error> {
 #[allow(deprecated)]
 pub fn propose_token_addition(env: &Env, caller: Address, token: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if storage::is_token_whitelisted(env, &token) {
         return Err(Error::TokenAlreadyWhitelisted);
     }
@@ -276,7 +273,7 @@ pub fn propose_token_addition(env: &Env, caller: Address, token: Address) -> Res
 #[allow(deprecated)]
 pub fn execute_token_addition(env: &Env, caller: Address, token: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     let execution_time =
         storage::get_pending_token_addition(env, &token).ok_or(Error::NoPendingTokenAddition)?;
     if env.ledger().timestamp() < execution_time {
@@ -296,7 +293,7 @@ pub fn execute_token_addition(env: &Env, caller: Address, token: Address) -> Res
 #[allow(deprecated)]
 pub fn remove_token(env: &Env, caller: Address, token: Address) -> Result<(), Error> {
     util::require_initialized(env)?;
-    util::require_admin(env, &caller)?;
+    util::auth_admin(env, &caller)?;
     if token == storage::get_token(env) {
         return Err(Error::CannotRemoveBaseToken);
     }

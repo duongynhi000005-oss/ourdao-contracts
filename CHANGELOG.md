@@ -5,6 +5,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 ## [Unreleased]
 
 ### Changed
+- Unified authentication and role authorization checks in util.rs via uth_member, uth_admin, and uth_pauser, standardizing caller signature verification and role assertions across dmin.rs, membership.rs, loans.rs, 	reasury.rs, and staking.rs (#254).
 - `exit_dao` / `calculate_exit_share` are now O(1): a maintained `ActiveContributions` total replaces the per-member scan (#353).
 - `pause` and `unpause` events now include the caller (#346).
 - `set_consensus_threshold` and `execute_policy_update` events now emit old and new values (#347).

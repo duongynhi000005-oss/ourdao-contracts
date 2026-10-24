@@ -74,8 +74,18 @@ pub fn is_pauser(env: &Env, who: &Address) -> bool {
     storage::get_pauser(env).as_ref() == Some(who)
 }
 
-/// Authorizes `caller` and asserts admin membership.
-pub fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
+/// Authenticate that caller signed the transaction and is an active DAO member.
+pub fn auth_member(env: &Env, caller: &Address) -> Result<Member, Error> {
+    caller.require_auth();
+    match storage::get_member(env, caller) {
+        Some(m) if m.status == MemberStatus::ActiveMember => Ok(m),
+        Some(_) => Err(Error::MemberNotActive),
+        None => Err(Error::NotMember),
+    }
+}
+
+/// Authenticate that caller signed the transaction and is an admin.
+pub fn auth_admin(env: &Env, caller: &Address) -> Result<(), Error> {
     caller.require_auth();
     if is_admin(env, caller) {
         Ok(())
@@ -84,14 +94,19 @@ pub fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
     }
 }
 
-/// Authorizes `caller` and returns their active-member record, or errors.
-pub fn require_active_member(env: &Env, caller: &Address) -> Result<Member, Error> {
+/// Authenticate that caller signed the transaction and is either an admin or the designated emergency pauser.
+pub fn auth_pauser(env: &Env, caller: &Address) -> Result<(), Error> {
     caller.require_auth();
-    match storage::get_member(env, caller) {
-        Some(m) if m.status == MemberStatus::ActiveMember => Ok(m),
-        Some(_) => Err(Error::MemberNotActive),
-        None => Err(Error::NotMember),
+    if is_admin(env, caller) || is_pauser(env, caller) {
+        Ok(())
+    } else {
+        Err(Error::NotAdmin)
     }
+}
+
+/// Authorizes caller and returns their active-member record, or errors.
+pub fn require_active_member(env: &Env, caller: &Address) -> Result<Member, Error> {
+    auth_member(env, caller)
 }
 
 /// One base vote per active member, plus a quadratic (square-root) boost for

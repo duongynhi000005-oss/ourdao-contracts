@@ -36,7 +36,7 @@ pub fn propose_withdrawal_in_asset(
 ) -> Result<u32, Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &proposer)?;
+    util::auth_member(env, &proposer)?;
 
     if amount <= 0 {
         return Err(Error::InvalidAmount);
@@ -90,7 +90,7 @@ pub fn propose_withdrawal_in_asset(
 pub fn vote(env: &Env, voter: Address, proposal_id: u32, support: bool) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &voter)?;
+    util::auth_member(env, &voter)?;
 
     let proposal =
         storage::get_treasury_proposal(env, proposal_id).ok_or(Error::TreasuryProposalNotFound)?;
@@ -213,7 +213,7 @@ pub fn cancel_treasury_proposal(
 ) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &proposer)?;
+    util::auth_member(env, &proposer)?;
     let mut proposal =
         storage::get_treasury_proposal(env, proposal_id).ok_or(Error::TreasuryProposalNotFound)?;
     if proposal.proposer != proposer {

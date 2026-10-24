@@ -98,7 +98,7 @@ pub fn request_loan_in_asset(
 ) -> Result<u32, Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &borrower)?;
+    util::auth_member(env, &borrower)?;
     if !storage::is_token_whitelisted(env, &asset) {
         return Err(Error::TokenNotWhitelisted);
     }
@@ -170,7 +170,7 @@ pub fn edit_loan_proposal(
 ) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &borrower)?;
+    util::auth_member(env, &borrower)?;
     let mut proposal =
         storage::get_loan_proposal(env, proposal_id).ok_or(Error::ProposalNotFound)?;
     if proposal.borrower != borrower {
@@ -223,7 +223,7 @@ pub fn edit_loan_proposal(
 pub fn cancel_loan_proposal(env: &Env, borrower: Address, proposal_id: u32) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &borrower)?;
+    util::auth_member(env, &borrower)?;
     let mut proposal =
         storage::get_loan_proposal(env, proposal_id).ok_or(Error::ProposalNotFound)?;
     if proposal.borrower != borrower {
@@ -272,7 +272,7 @@ pub fn vote_on_loan_proposal(
 ) -> Result<(), Error> {
     util::require_initialized(env)?;
     util::require_not_paused(env)?;
-    util::require_active_member(env, &voter)?;
+    util::auth_member(env, &voter)?;
 
     let mut proposal = storage::get_loan_proposal(env, proposal_id)
         .ok_or(Error::ProposalNotFound)
