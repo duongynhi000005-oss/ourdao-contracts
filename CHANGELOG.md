@@ -11,6 +11,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Documented the multi-token treasury architecture in `README.md`, replacing outdated single-token claims with explanations of base-token governance, 48h timelocked token whitelisting, and asset-denominated loan and withdrawal workflows (`request_loan_in_asset`, `repay_loan_in_asset`, `propose_withdrawal_in_asset`) (#256).
 - `docs/events.schema.json`: machine-readable event schema covering all contract event topics (#344).
 - `treasury::tally` and `loans::vote_on_loan_proposal` read the active-member count (and policy/threshold) once per call (#355).
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).
