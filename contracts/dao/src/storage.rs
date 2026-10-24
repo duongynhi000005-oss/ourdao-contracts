@@ -57,6 +57,9 @@ pub(crate) enum DataKey {
     YieldAccumulator,
     YieldRemainder,
     MemberYieldSnapshot(Address),
+    YieldAccumulatorFor(Address),
+    YieldRemainderFor(Address),
+    MemberYieldSnapshotFor(Address, Address),
     // native-swap modules
     Doc(ProposalKind, u32),
     Name(String),
@@ -411,6 +414,11 @@ pub fn set_stake(env: &Env, addr: &Address, amount: i128) {
 
 // ---------- pull-based yield accrual ----------
 
+pub fn is_base_token(env: &Env, asset: &Address) -> bool {
+    let base: Option<Address> = env.storage().instance().get(&DataKey::Token);
+    base.as_ref() == Some(asset)
+}
+
 pub fn get_yield_accumulator(env: &Env) -> i128 {
     env.storage()
         .instance()
@@ -424,6 +432,31 @@ pub fn set_yield_accumulator(env: &Env, value: i128) {
         .set(&DataKey::YieldAccumulator, &value);
 }
 
+pub fn get_yield_accumulator_for(env: &Env, asset: &Address) -> i128 {
+    if is_base_token(env, asset) {
+        get_yield_accumulator(env)
+    } else {
+        let key = DataKey::YieldAccumulatorFor(asset.clone());
+        match env.storage().persistent().get(&key) {
+            Some(val) => {
+                extend_persistent(env, &key);
+                val
+            }
+            None => 0,
+        }
+    }
+}
+
+pub fn set_yield_accumulator_for(env: &Env, asset: &Address, value: i128) {
+    if is_base_token(env, asset) {
+        set_yield_accumulator(env, value);
+    } else {
+        let key = DataKey::YieldAccumulatorFor(asset.clone());
+        env.storage().persistent().set(&key, &value);
+        extend_persistent(env, &key);
+    }
+}
+
 pub fn get_yield_snapshot(env: &Env, addr: &Address) -> i128 {
     env.storage()
         .persistent()
@@ -435,6 +468,31 @@ pub fn set_yield_snapshot(env: &Env, addr: &Address, value: i128) {
     let key = DataKey::MemberYieldSnapshot(addr.clone());
     env.storage().persistent().set(&key, &value);
     extend_persistent(env, &key);
+}
+
+pub fn get_yield_snapshot_for(env: &Env, addr: &Address, asset: &Address) -> i128 {
+    if is_base_token(env, asset) {
+        get_yield_snapshot(env, addr)
+    } else {
+        let key = DataKey::MemberYieldSnapshotFor(addr.clone(), asset.clone());
+        match env.storage().persistent().get(&key) {
+            Some(val) => {
+                extend_persistent(env, &key);
+                val
+            }
+            None => 0,
+        }
+    }
+}
+
+pub fn set_yield_snapshot_for(env: &Env, addr: &Address, asset: &Address, value: i128) {
+    if is_base_token(env, asset) {
+        set_yield_snapshot(env, addr, value);
+    } else {
+        let key = DataKey::MemberYieldSnapshotFor(addr.clone(), asset.clone());
+        env.storage().persistent().set(&key, &value);
+        extend_persistent(env, &key);
+    }
 }
 
 // ---------- native-swap module accessors ----------
@@ -487,16 +545,45 @@ pub fn remove_commit(env: &Env, id: u32, voter: &Address) {
 }
 
 pub fn get_yield_remainder(env: &Env) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::YieldRemainder)
-        .unwrap_or(0)
+    let key = DataKey::YieldRemainder;
+    match env.storage().persistent().get(&key) {
+        Some(val) => {
+            extend_persistent(env, &key);
+            val
+        }
+        None => 0,
+    }
 }
 
 pub fn set_yield_remainder(env: &Env, value: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::YieldRemainder, &value);
+    let key = DataKey::YieldRemainder;
+    env.storage().persistent().set(&key, &value);
+    extend_persistent(env, &key);
+}
+
+pub fn get_yield_remainder_for(env: &Env, asset: &Address) -> i128 {
+    if is_base_token(env, asset) {
+        get_yield_remainder(env)
+    } else {
+        let key = DataKey::YieldRemainderFor(asset.clone());
+        match env.storage().persistent().get(&key) {
+            Some(val) => {
+                extend_persistent(env, &key);
+                val
+            }
+            None => 0,
+        }
+    }
+}
+
+pub fn set_yield_remainder_for(env: &Env, asset: &Address, value: i128) {
+    if is_base_token(env, asset) {
+        set_yield_remainder(env, value);
+    } else {
+        let key = DataKey::YieldRemainderFor(asset.clone());
+        env.storage().persistent().set(&key, &value);
+        extend_persistent(env, &key);
+    }
 }
 
 pub fn get_delegation(env: &Env, member: &Address) -> Option<Address> {

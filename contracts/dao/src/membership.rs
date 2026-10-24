@@ -46,9 +46,11 @@ pub fn register_member(env: &Env, member: Address) -> Result<(), Error> {
     storage::set_member(env, &record);
 
     // Snapshot the accumulator so the new member earns nothing from interest
-    // repaid before they joined.
-    let acc = storage::get_yield_accumulator(env);
-    storage::set_yield_snapshot(env, &member, acc);
+    // repaid before they joined (#271: across all whitelisted assets).
+    for token in storage::get_whitelisted_tokens(env).iter() {
+        let acc = storage::get_yield_accumulator_for(env, &token);
+        storage::set_yield_snapshot_for(env, &member, &token, acc);
+    }
 
     if !is_returning {
         let mut members = storage::get_members(env);
@@ -92,13 +94,32 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
             return Err(Error::InsufficientTreasury);
         }
     }
+
+    let whitelisted = storage::get_whitelisted_tokens(env);
+    let mut extra_payouts = soroban_sdk::Vec::new(env);
+    for token in whitelisted.iter() {
+        if !storage::is_base_token(env, &token) {
+            let pending_extra = compute_pending_yield_for(env, &member, &token);
+            if pending_extra > 0 {
+                let contract_balance =
+                    util::token_client_for(env, &token).balance(&util::contract_address(env));
+                if contract_balance < pending_extra {
+                    return Err(Error::InsufficientTreasury);
+                }
+                extra_payouts.push_back((token.clone(), pending_extra));
+            }
+        }
+    }
+
     if stake > 0 {
         storage::set_stake(env, &member, 0);
         storage::set_total_staked(env, storage::get_total_staked(env) - stake);
     }
     // Settle yield: snapshot to current accumulator so rejoining starts clean.
-    let acc = storage::get_yield_accumulator(env);
-    storage::set_yield_snapshot(env, &member, acc);
+    for token in whitelisted.iter() {
+        let acc = storage::get_yield_accumulator_for(env, &token);
+        storage::set_yield_snapshot_for(env, &member, &token, acc);
+    }
 
     // Release the member's name so they can re-register after rejoining.
     if let Some(name) = storage::get_name_of(env, &member) {
@@ -130,6 +151,13 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
     if payout > 0 {
         util::token_client(env).transfer(&util::contract_address(env), &member, &payout);
     }
+    for (token, amount) in extra_payouts.iter() {
+        util::token_client_for(env, &token).transfer(
+            &util::contract_address(env),
+            &member,
+            &amount,
+        );
+    }
 
     env.events()
         .publish((symbol_short!("exited"),), (member, share, pending));
@@ -149,6 +177,42 @@ pub fn claim_rewards(env: &Env, member: Address) -> Result<i128, Error> {
     let acc = storage::get_yield_accumulator(env);
     storage::set_yield_snapshot(env, &member, acc);
     util::token_client(env).transfer(&util::contract_address(env), &member, &pending);
+    let now = env.ledger().timestamp();
+    env.events().publish(
+        (symbol_short!("claimed"), member.clone(), pending),
+        StakingRewardClaimed {
+            member,
+            amount: pending,
+            timestamp: now,
+        },
+    );
+    Ok(pending)
+}
+
+#[allow(deprecated)]
+pub fn claim_rewards_in_asset(env: &Env, member: Address, asset: Address) -> Result<i128, Error> {
+    if storage::is_base_token(env, &asset) {
+        return claim_rewards(env, member);
+    }
+    util::require_initialized(env)?;
+    util::require_not_paused(env)?;
+    util::require_active_member(env, &member)?;
+    if !storage::is_token_whitelisted(env, &asset) {
+        return Err(Error::TokenNotWhitelisted);
+    }
+    let pending = compute_pending_yield_for(env, &member, &asset);
+    if pending <= 0 {
+        return Err(Error::NothingToClaim);
+    }
+    let acc = storage::get_yield_accumulator_for(env, &asset);
+    storage::set_yield_snapshot_for(env, &member, &asset, acc);
+
+    let client = util::token_client_for(env, &asset);
+    let contract_balance = client.balance(&util::contract_address(env));
+    if contract_balance < pending {
+        return Err(Error::InsufficientTreasury);
+    }
+    client.transfer(&util::contract_address(env), &member, &pending);
     let now = env.ledger().timestamp();
     env.events().publish(
         (symbol_short!("claimed"), member.clone(), pending),
@@ -184,6 +248,7 @@ pub fn calculate_exit_share(env: &Env, member: &Address) -> i128 {
     share_from_contributions(treasury, record.contribution, total_contributions)
 }
 
+#[allow(dead_code)]
 fn total_active_contributions(env: &Env) -> i128 {
     storage::get_members(env)
         .iter()
@@ -196,6 +261,12 @@ fn total_active_contributions(env: &Env) -> i128 {
 /// Single definition of a member's unclaimed yield. Used by `exit_dao`,
 /// `claim_rewards` and the public `get_pending_yield` view so the amount
 /// displayed is always the amount paid.
+pub(crate) fn compute_pending_yield_for(env: &Env, addr: &Address, asset: &Address) -> i128 {
+    let acc = storage::get_yield_accumulator_for(env, asset);
+    let snap = storage::get_yield_snapshot_for(env, addr, asset);
+    (acc - snap).max(0)
+}
+
 pub(crate) fn compute_pending_yield(env: &Env, addr: &Address) -> i128 {
     let acc = storage::get_yield_accumulator(env);
     let snap = storage::get_yield_snapshot(env, addr);

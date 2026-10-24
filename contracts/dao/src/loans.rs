@@ -603,9 +603,8 @@ fn repay_loan_internal(
     }
     storage::set_loan(env, &loan);
 
-    // Yield is accounted and claimed in the base token, so interest paid in
-    // any other asset stays in the treasury rather than being distributed.
-    if asset == storage::get_token(env) {
+    // Credit interest to the yield accumulator of the asset it was paid in (#271).
+    if interest_component > 0 {
         distribute_interest(env, interest_component, &asset);
     }
     // External token interaction last; failed transfers revert all accounting effects.
@@ -710,8 +709,10 @@ pub fn mark_loan_defaulted(env: &Env, loan_id: u32) -> Result<(), Error> {
         // whatever yield they had accrued and not yet claimed at the moment
         // of default. Advancing the snapshot leaves that amount in the
         // treasury, where it accrues to the remaining members' exit shares.
-        let acc = storage::get_yield_accumulator(env);
-        storage::set_yield_snapshot(env, &loan.borrower, acc);
+        for token in storage::get_whitelisted_tokens(env).iter() {
+            let acc = storage::get_yield_accumulator_for(env, &token);
+            storage::set_yield_snapshot_for(env, &loan.borrower, &token, acc);
+        }
     }
     storage::extend_instance(env);
 
@@ -751,15 +752,15 @@ pub(crate) fn distribute_interest(env: &Env, interest: i128, asset: &Address) {
     }
 
     // #60 — Carry the sub-divisible remainder forward instead of silently discarding
-    let total_interest = interest + storage::get_yield_remainder(env);
+    let total_interest = interest + storage::get_yield_remainder_for(env, asset);
     let per_member = total_interest / active;
     let remainder = total_interest % active;
 
-    storage::set_yield_remainder(env, remainder);
+    storage::set_yield_remainder_for(env, asset, remainder);
 
     if per_member > 0 {
-        let current = storage::get_yield_accumulator(env);
-        storage::set_yield_accumulator(env, current + per_member);
+        let current = storage::get_yield_accumulator_for(env, asset);
+        storage::set_yield_accumulator_for(env, asset, current + per_member);
     }
 
     // Unconditionally publish the event so the indexer sees the interest paid

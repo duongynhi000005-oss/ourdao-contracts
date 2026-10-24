@@ -133,6 +133,15 @@ impl OurDao {
         membership::claim_rewards(&env, member)
     }
 
+    /// Withdraw accrued loan-interest yield in a specific whitelisted asset for the caller.
+    pub fn claim_rewards_in_asset(
+        env: Env,
+        member: Address,
+        asset: Address,
+    ) -> Result<i128, Error> {
+        membership::claim_rewards_in_asset(&env, member, asset)
+    }
+
     pub fn delegate_vote(env: Env, delegator: Address, delegatee: Address) -> Result<(), Error> {
         membership::delegate_vote(&env, delegator, delegatee)
     }
@@ -574,6 +583,10 @@ impl OurDao {
 
     pub fn get_pending_yield(env: Env, member: Address) -> i128 {
         membership::compute_pending_yield(&env, &member)
+    }
+
+    pub fn get_pending_yield_in_asset(env: Env, member: Address, asset: Address) -> i128 {
+        membership::compute_pending_yield_for(&env, &member, &asset)
     }
 
     /// Returns the address `delegator` has delegated their vote to, or `None`

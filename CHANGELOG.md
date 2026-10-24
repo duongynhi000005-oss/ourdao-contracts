@@ -14,6 +14,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Credit loan repayment interest per-asset with dedicated yield accumulators and snapshots (`get_pending_yield_in_asset`, `claim_rewards_in_asset`), ensuring repayment in secondary asset B does not inflate base-token yield (#271).
 - Stateful random-sequence test harness covering joins, exits, stakes, unstakes, loans, repayments, defaults, and treasury proposals across single and multi-token assets with continuous invariant checking (#295).
 - Property test proving loan.id == proposal.id under random sequences of approvals, rejections, expiries, and cancellations across multiple members and assets (#292).
 - Property test proving a member never has two active loans across random request, approve, partial repay, full repay, and default sequences (#291).

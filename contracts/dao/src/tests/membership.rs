@@ -320,3 +320,86 @@ fn pending_yield_view_matches_claim_rewards_payout() {
     s.client.exit_dao(&v2);
     assert_eq!(s.token.balance(&v2) - before, share + shown);
 }
+
+// ==================== issue #271: per-asset yield accumulator ====================
+#[test]
+fn loan_in_asset_b_repaid_credits_asset_b_yield_leaving_base_yield_unchanged() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let asset_b = whitelist_second_asset(&s, 50_000);
+
+    // Initial pending yields for both assets are strictly 0
+    assert_eq!(s.client.get_pending_yield(&v1), 0);
+    assert_eq!(s.client.get_pending_yield(&v2), 0);
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v1, &asset_b.address),
+        0
+    );
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v2, &asset_b.address),
+        0
+    );
+
+    // Borrower requests and disburses a loan in asset B
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &4_000, &asset_b.address, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    let interest = loan.total_repayment - loan.principal;
+    assert!(interest > 0);
+    let per_member = interest / 3;
+
+    // Repay loan in asset B
+    mint_asset(&s, &asset_b.address, &borrower, loan.total_repayment);
+    s.client
+        .repay_loan_in_asset(&borrower, &pid, &asset_b.address);
+
+    // Core Invariant 1: Base token pending yield remains strictly 0 (unchanged)
+    assert_eq!(s.client.get_pending_yield(&borrower), 0);
+    assert_eq!(s.client.get_pending_yield(&v1), 0);
+    assert_eq!(s.client.get_pending_yield(&v2), 0);
+
+    // Core Invariant 2: Asset B pending yield increased for all active members
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v1, &asset_b.address),
+        per_member
+    );
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v2, &asset_b.address),
+        per_member
+    );
+    assert_eq!(
+        s.client
+            .get_pending_yield_in_asset(&borrower, &asset_b.address),
+        per_member
+    );
+
+    // Member v1 claims reward in asset B
+    let v1_bal_before = asset_b.balance(&v1);
+    let claimed = s.client.claim_rewards_in_asset(&v1, &asset_b.address);
+    assert_eq!(claimed, per_member);
+    assert_eq!(asset_b.balance(&v1), v1_bal_before + per_member);
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v1, &asset_b.address),
+        0
+    );
+
+    // Base yield still strictly 0
+    assert_eq!(s.client.get_pending_yield(&v1), 0);
+
+    // Exit settlement in asset B
+    let v2_bal_before = asset_b.balance(&v2);
+    s.client.exit_dao(&v2);
+    assert_eq!(asset_b.balance(&v2), v2_bal_before + per_member);
+    assert_eq!(
+        s.client.get_pending_yield_in_asset(&v2, &asset_b.address),
+        0
+    );
+}

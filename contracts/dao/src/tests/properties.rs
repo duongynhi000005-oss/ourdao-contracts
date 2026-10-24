@@ -279,8 +279,7 @@ proptest! {
             total_staked += amt;
         }
 
-        // Simulate token backing for stakes held in DAO custody
-        token_mint.mint(&s.client.address, &total_staked);
+
 
         let initial_fee_treasury = 3 * FEE;
         let expected_net_treasury = initial_fee_treasury + extra_treasury;
