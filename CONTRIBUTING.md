@@ -10,6 +10,7 @@ Please read this in full before opening a pull request.
 - [Local setup](#local-setup)
 - [Running the checks CI runs](#running-the-checks-ci-runs)
 - [What a good pull request looks like](#what-a-good-pull-request-looks-like)
+- [Stellar Wave contributor workflow](#stellar-wave-contributor-workflow)
 - [Contract-specific rules](#contract-specific-rules)
 - [What gets closed without review](#what-gets-closed-without-review)
 - [Reporting a security issue](#reporting-a-security-issue)
@@ -76,6 +77,44 @@ Note the `--locked` flag: the committed `Cargo.lock` is authoritative. Don't upd
 - **It doesn't reformat code you didn't change.** Whitespace-only churn makes review harder and hides the real diff.
 - **Its description explains why, not just what.** The diff already shows what changed. Review needs to know why this is the right change.
 - **CI is green.** Check before requesting review, not after.
+
+## Stellar Wave contributor workflow
+
+Contributors participating in the Stellar Wave program must follow this workflow. Wave tasks move quickly and multiple contributors work concurrently across the repository; adherence to these requirements prevents merge conflicts, CI failures, and review bottlenecks:
+
+1. **One issue per pull request.**  
+   Never bundle multiple issues into a single pull request. Each PR must address exactly one assigned issue. If you discover a secondary issue or bug while working, report it separately. Bundled PRs will be closed without review.
+
+2. **Branch naming convention.**  
+   Branches must be named following the pattern:
+   - `fix/issue-<number>-<short-slug>` for bug fixes
+   - `feat/issue-<number>-<short-slug>` for new features or capabilities
+   - `docs/issue-<number>-<short-slug>` for documentation updates
+   - `test/issue-<number>-<short-slug>` for tests and property benchmarks
+
+3. **Rebase against `upstream/main`, do not merge.**  
+   Always rebase your branch against the latest `upstream/main` before opening your PR and before requesting review:
+   ```bash
+   git fetch upstream
+   git rebase upstream/main
+   ```
+   Do not run `git merge main` into your feature branch. Rebase keeps git history linear, makes bisecting straightforward, and eliminates merge-conflict loops.
+
+4. **Tests required.**  
+   Every bug fix and behavioral change must include automated test coverage (unit test, integration test, or property invariant). Verify that your new test fails without your code changes and passes with them.
+
+5. **Run `make ci` before pushing.**  
+   Before pushing your commits or opening a pull request, run the full local CI suite:
+   ```bash
+   make ci
+   ```
+   This verifies formatting (`cargo fmt`), strict linting (`cargo clippy`), test suite execution (`cargo test`), and the wasm release build (`cargo build --release --target wasm32v1-none`). All checks must pass with zero errors and zero warnings.
+
+6. **Link the issue with `Closes #<number>`.**  
+   Include `Closes #<issue-number>` (e.g., `Closes #245`) in the description body of the pull request. This ensures GitHub automatically links and resolves the issue once the pull request is merged.
+
+7. **Claim and get assigned before coding.**  
+   Comment on the issue and confirm you are assigned before submitting code. Unsolicited pull requests opened without prior assignment will be closed without review.
 
 ## Contract-specific rules
 

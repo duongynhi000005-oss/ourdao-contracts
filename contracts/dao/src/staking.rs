@@ -36,8 +36,10 @@ pub fn stake(env: &Env, member: Address, amount: i128) -> Result<(), Error> {
     storage::extend_instance(env);
 
     let voting_weight = util::voting_weight(env, &member);
-    env.events()
-        .publish((symbol_short!("staked"),), (member, amount, new_stake, voting_weight));
+    env.events().publish(
+        (symbol_short!("staked"),),
+        (member, amount, new_stake, voting_weight),
+    );
     Ok(())
 }
 
@@ -91,7 +93,9 @@ pub fn unstake(env: &Env, member: Address, amount: i128) -> Result<(), Error> {
     storage::extend_instance(env);
 
     let voting_weight = util::voting_weight(env, &member);
-    env.events()
-        .publish((symbol_short!("unstaked"),), (member, amount, new_stake, voting_weight));
+    env.events().publish(
+        (symbol_short!("unstaked"),),
+        (member, amount, new_stake, voting_weight),
+    );
     Ok(())
 }

@@ -55,6 +55,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - CI workflow and formatting violations.
 
 ### Documentation
+- Documented the Stellar Wave contributor workflow in `CONTRIBUTING.md` and linked from `README.md` (#245).
 - README "Resource costs" table, with the membership ceiling corrected from the measured footprint: `exit_dao` exceeds the SDK's 100-entry mainnet snapshot at 86 members and votes at 90 (#358).
 - ADR-0004 (loan due-date extension proposals) and ADR-0005 (interest discount from member loan history) (#359, #360).
 - Removed the orphaned, never-compiled `src/test.rs`; its four unique tests were ported to `src/tests/` (#237).
