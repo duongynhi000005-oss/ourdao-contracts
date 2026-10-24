@@ -2,7 +2,9 @@ use soroban_sdk::{symbol_short, Address, Env, String};
 
 use crate::error::Error;
 use crate::storage;
-use crate::types::{ProposalStatus, TreasuryProposal};
+use crate::types::{
+    ProposalStatus, TreasuryProposal, MAX_PROPOSAL_REASON_LEN, PRIVATE_PROPOSAL_PERIOD_MULTIPLIER,
+};
 use crate::util;
 
 // `env.events().publish` is deprecated in soroban-sdk in favour of
@@ -41,7 +43,10 @@ pub fn propose_withdrawal_in_asset(
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
-    if destination == env.current_contract_address() || reason.is_empty() || reason.len() > 256 {
+    if destination == env.current_contract_address()
+        || reason.is_empty()
+        || reason.len() > MAX_PROPOSAL_REASON_LEN
+    {
         return Err(Error::InvalidProposal);
     }
     if storage::get_open_proposals(env, &proposer) >= storage::MAX_OPEN_PROPOSALS_PER_MEMBER {
@@ -123,7 +128,10 @@ pub fn tally(
     // lifecycle: once VOTING_PERIOD has elapsed since creation, persist the
     // Expired status and reject further votes.
     let voting_end = if proposal.private {
-        proposal.created_at + proposal.voting_period.saturating_mul(2)
+        proposal.created_at
+            + proposal
+                .voting_period
+                .saturating_mul(PRIVATE_PROPOSAL_PERIOD_MULTIPLIER)
     } else {
         proposal.created_at + proposal.voting_period
     };
@@ -159,7 +167,7 @@ pub fn tally(
         }
     } else {
         let remaining = active_members.saturating_sub(proposal.votes_cast);
-        let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
+        let max_remaining = remaining as i128 * (util::BASE_VOTE_WEIGHT + util::MAX_STAKE_BONUS);
         if proposal.for_votes + max_remaining < required {
             proposal.status = ProposalStatus::Rejected;
             env.events().publish(

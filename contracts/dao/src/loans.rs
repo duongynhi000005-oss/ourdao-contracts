@@ -4,7 +4,7 @@ use crate::error::Error;
 use crate::storage;
 use crate::types::{
     Loan, LoanProposal, LoanStatus, LoanTerms, LoanTermsEdited, MemberStatus, ProposalPhase,
-    ProposalStatus, BASIS_POINTS,
+    ProposalStatus, BASIS_POINTS, BPS_CEIL_INCREMENT, MAX_METADATA_CID_LEN,
 };
 use crate::util;
 
@@ -42,7 +42,7 @@ fn quote_terms(env: &Env, amount: i128, treasury: i128) -> LoanTerms {
     let interest = if amount > 0 && rate > 0 {
         amount
             .checked_mul(rate)
-            .and_then(|v| v.checked_add(BASIS_POINTS - 1))
+            .and_then(|v| v.checked_add(BPS_CEIL_INCREMENT))
             .and_then(|v| v.checked_div(BASIS_POINTS))
             .unwrap_or(i128::MAX - amount)
     } else {
@@ -116,7 +116,7 @@ pub fn request_loan_in_asset(
         if cid.is_empty() {
             return Err(Error::InvalidMetadataCid);
         }
-        if cid.len() > 64 {
+        if cid.len() > MAX_METADATA_CID_LEN {
             return Err(Error::DocumentTooLarge);
         }
     }
@@ -375,7 +375,7 @@ fn vote_on_loan_proposal_internal(
         // active_members - 1 eligible voters can cast a vote.
         let eligible_voters = active_members.saturating_sub(1);
         let remaining = eligible_voters.saturating_sub(proposal.votes_cast);
-        let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
+        let max_remaining = remaining as i128 * (util::BASE_VOTE_WEIGHT + util::MAX_STAKE_BONUS);
         if proposal.for_votes + max_remaining < required {
             proposal.status = ProposalStatus::Rejected;
             proposal.phase = ProposalPhase::Expired;
@@ -564,8 +564,8 @@ fn repay_loan_internal(
         let penalty = if outstanding > 0 && policy.default_penalty_bps > 0 {
             outstanding
                 .checked_mul(policy.default_penalty_bps as i128)
-                .and_then(|v| v.checked_add(crate::types::BASIS_POINTS - 1))
-                .and_then(|v| v.checked_div(crate::types::BASIS_POINTS))
+                .and_then(|v| v.checked_add(BPS_CEIL_INCREMENT))
+                .and_then(|v| v.checked_div(BASIS_POINTS))
                 .unwrap_or(0)
         } else {
             0

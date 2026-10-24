@@ -2,7 +2,34 @@ use soroban_sdk::{contracttype, Address, Bytes, String, Vec};
 
 /// Basis-points denominator (100% == 10_000).
 pub const BASIS_POINTS: i128 = 10_000;
-/// Minimum length for a registered name (inclusive).
+/// Alias for basis-points divisor.
+#[allow(dead_code)]
+pub const BPS_DIVISOR: i128 = BASIS_POINTS;
+/// Basis-points ceiling round-up increment (BASIS_POINTS - 1).
+pub const BPS_CEIL_INCREMENT: i128 = BASIS_POINTS - 1;
+/// Maximum percentage represented in basis points (100% == 10_000).
+#[allow(dead_code)]
+pub const MAX_BPS: u32 = 10_000;
+/// Default threshold in basis points (51% == 5_100).
+#[allow(dead_code)]
+pub const DEFAULT_THRESHOLD_BPS: u32 = 5_100;
+
+/// Number of seconds in one minute (60s).
+#[allow(dead_code)]
+pub const SECONDS_PER_MINUTE: u64 = 60;
+/// Number of seconds in one hour (3_600s).
+#[allow(dead_code)]
+pub const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
+/// Number of seconds in one day (86_400s).
+#[allow(dead_code)]
+pub const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
+
+/// Multiplier for private proposal voting duration (commit phase + reveal phase = 2x).
+pub const PRIVATE_PROPOSAL_PERIOD_MULTIPLIER: u64 = 2;
+/// Maximum length of proposal reason string in bytes.
+pub const MAX_PROPOSAL_REASON_LEN: u32 = 256;
+/// Maximum length of metadata CID string in bytes.
+pub const MAX_METADATA_CID_LEN: u32 = 64;
 pub const NAME_MIN_LEN: u32 = 3;
 /// Maximum length for a registered name (inclusive). Keeps the on-chain
 /// storage and every `name_reg` event payload bounded.
