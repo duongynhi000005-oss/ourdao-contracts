@@ -1798,3 +1798,144 @@ fn test_loan_default_grace_period_boundaries() {
     let res_late = s.client.try_mark_loan_defaulted(&pid);
     assert_eq!(res_late, Err(Ok(Error::LoanNotActive)));
 }
+
+// ==================== issue #286: loan lifecycle in second asset ====================
+
+#[test]
+fn loan_lifecycle_in_second_asset() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let asset = whitelist_second_asset(&s, 10_000);
+    let initial_base_treasury = s.client.get_treasury_balance();
+    let initial_borrower_base = s.token.balance(&borrower);
+    let initial_v1_base = s.token.balance(&v1);
+
+    // Initial balances check
+    assert_eq!(asset.balance(&borrower), 0);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        10_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 1. request_loan_in_asset
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &1_000, &asset.address, &None);
+
+    let prop = s.client.get_loan_proposal(&pid).unwrap();
+    assert_eq!(prop.status, ProposalStatus::Pending);
+    assert_eq!(prop.amount, 1_000);
+
+    // Assert balances after request: unchanged
+    assert_eq!(asset.balance(&borrower), 0);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        10_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 2. edit_loan_proposal: re-quote to 2,000 in asset B
+    s.client.edit_loan_proposal(&borrower, &pid, &2_000);
+    let edited_prop = s.client.get_loan_proposal(&pid).unwrap();
+    assert_eq!(edited_prop.amount, 2_000);
+
+    // Assert balances after edit: unchanged
+    assert_eq!(asset.balance(&borrower), 0);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        10_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 3. vote_on_loan_proposal
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+
+    // 1 vote not enough for quorum, balances still unchanged
+    assert_eq!(asset.balance(&borrower), 0);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        10_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 4. vote reaching quorum triggers disburse in asset B
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let loan = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan.status, LoanStatus::Active);
+    assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
+
+    // Assert balances after disburse: borrower receives exactly 2,000 asset B, base unchanged
+    assert_eq!(asset.balance(&borrower), 2_000);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        8_000
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // Prepare borrower with total repayment in asset B
+    let total_repayment = loan.total_repayment;
+    assert!(total_repayment > 2_000); // contains interest
+    mint_asset(&s, &asset.address, &borrower, total_repayment - 2_000);
+    assert_eq!(asset.balance(&borrower), total_repayment);
+
+    // 5. repay_loan_partial
+    let partial_repay = total_repayment / 2;
+    s.client.repay_loan_partial(&borrower, &pid, &partial_repay);
+
+    let loan_mid = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_mid.status, LoanStatus::Active);
+    assert_eq!(loan_mid.amount_repaid, partial_repay);
+    assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
+
+    // Assert balances after partial repay
+    assert_eq!(asset.balance(&borrower), total_repayment - partial_repay);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        8_000 + partial_repay
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 6. repay_loan_in_asset: full remaining repayment
+    s.client
+        .repay_loan_in_asset(&borrower, &pid, &asset.address);
+
+    let loan_done = s.client.get_loan(&pid).unwrap();
+    assert_eq!(loan_done.status, LoanStatus::Repaid);
+    assert_eq!(loan_done.amount_repaid, total_repayment);
+    assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
+
+    // Assert balances after full repayment
+    assert_eq!(asset.balance(&borrower), 0);
+    assert_eq!(s.token.balance(&borrower), initial_borrower_base);
+    assert_eq!(
+        s.client.get_treasury_balance_in_asset(&asset.address),
+        8_000 + total_repayment
+    );
+    assert_eq!(s.client.get_treasury_balance(), initial_base_treasury);
+
+    // 7. claim_yield: non-base asset interest stays in asset yield or can be claimed via claim_rewards_in_asset
+    assert_eq!(s.client.get_pending_yield(&v1), 0);
+    assert_eq!(s.client.get_pending_yield(&v2), 0);
+    let claim_res = s.client.try_claim_rewards(&v1);
+    assert_eq!(claim_res, Err(Ok(Error::NothingToClaim)));
+
+    // Verify claim_rewards_in_asset succeeds and transfers asset B yield to voters
+    let v1_asset_yield = s.client.get_pending_yield_in_asset(&v1, &asset.address);
+    assert!(v1_asset_yield > 0);
+    let claimed = s.client.claim_rewards_in_asset(&v1, &asset.address);
+    assert_eq!(claimed, v1_asset_yield);
+    assert_eq!(asset.balance(&v1), claimed);
+    assert_eq!(s.token.balance(&v1), initial_v1_base);
+}
