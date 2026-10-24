@@ -14,6 +14,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- ADR-0001: Multi-asset treasury exit share settlement architecture specification (#269).
 - Boundary tests verifying state transitions at exact editing, voting, reveal, and default grace deadlines (t = deadline - 1, t = deadline, t = deadline + 1) (#299).
 - Credit loan repayment interest per-asset with dedicated yield accumulators and snapshots (`get_pending_yield_in_asset`, `claim_rewards_in_asset`), ensuring repayment in secondary asset B does not inflate base-token yield (#271).
 - Stateful random-sequence test harness covering joins, exits, stakes, unstakes, loans, repayments, defaults, and treasury proposals across single and multi-token assets with continuous invariant checking (#295).
