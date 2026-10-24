@@ -61,7 +61,9 @@ cargo test --locked                                          # full test suite
 cargo build --locked --target wasm32v1-none --release        # wasm build
 ```
 
-`make ci` runs all four in sequence — use it as your one-command pre-push check. The individual shorthands `make fmt`, `make clippy`, `make test`, and `make build` map flag-for-flag to their CI equivalents.
+`make ci` runs the complete sequence (`check`, `fmt`, `clippy`, `test`, `coverage`, and `build`) — use it as your one-command pre-push check. The individual shorthands `make check`, `make fmt`, `make clippy`, `make test`, `make coverage`, and `make build` map flag-for-flag to their CI equivalents.
+
+`make coverage` runs `cargo llvm-cov --locked --all-targets --fail-under-lines 95` to enforce the 95% line-coverage floor before push (`cargo install cargo-llvm-cov --locked` once locally).
 
 A separate `audit` job runs `cargo audit` against `Cargo.lock` on every push and PR (`cargo install cargo-audit --locked` once locally, then `cargo audit` or `make audit`). It's a distinct job on purpose: an advisory landing against a dependency we already know about and can't move on (see the `ed25519-dalek` note below) shouldn't block merging unrelated PRs, but it still needs to stay visible.
 

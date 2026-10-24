@@ -1,9 +1,9 @@
 WASM_TARGET := wasm32v1-none
 WASM := target/$(WASM_TARGET)/release/ourdao_dao.wasm
 
-.PHONY: all build test fmt clippy audit ci clean optimize size costs bindings
+.PHONY: all build test fmt clippy audit ci clean optimize size costs bindings check coverage
 
-all: fmt clippy test build
+all: check fmt clippy test build
 
 build:
 	cargo build --locked --target $(WASM_TARGET) --release
@@ -32,15 +32,22 @@ costs: $(OPTIMIZED)
 bindings: generate-bindings
 	@echo "TypeScript bindings are at bindings/ts/"
 
+check:
+	cargo check --locked --all-targets
+
+# Requires `cargo install cargo-llvm-cov --locked` once locally.
+coverage:
+	cargo llvm-cov --locked --all-targets --fail-under-lines 95
+
 fmt:
 	cargo fmt --all -- --check
 
 clippy:
 	cargo clippy --all-targets --locked -- -D warnings
 
-# Reproduces the full CI sequence locally (minus coverage and supply-chain jobs).
+# Reproduces the full CI sequence locally (minus Docker reproducible build).
 # Use this before pushing to confirm CI will pass.
-ci: fmt clippy test build
+ci: check fmt clippy test coverage build
 
 # Requires `cargo install cargo-audit --locked` once.
 audit:
