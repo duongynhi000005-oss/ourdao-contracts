@@ -1,8 +1,10 @@
+extern crate std;
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{token, Address, Env, Vec};
 
 use super::common::*;
+use crate::types::MemberStatus;
 use crate::util::{MAX_STAKE_BONUS, STAKE_WEIGHT_UNIT};
 use crate::{OurDao, OurDaoClient};
 
@@ -240,5 +242,121 @@ proptest! {
         let treasury = client.get_treasury_balance();
         let sum: i128 = members.iter().map(|m| client.calculate_exit_share(&m)).sum();
         prop_assert!(sum <= treasury);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(30))]
+
+    /// Issue #293: `TotalMembers` and `ActiveMembers` counters strictly match reality
+    /// across arbitrary join, exit, and rejoin sequences.
+    ///
+    /// Invariants:
+    /// 1. `get_total_members()` == total unique members ever registered == `storage::get_members(&env).len()`
+    /// 2. `get_active_members()` == count of `Member` records with `status == MemberStatus::ActiveMember`
+    /// 3. `get_active_members() <= get_total_members()`
+    /// 4. When a member exits, `active_members` decreases by 1 while `total_members` is invariant.
+    /// 5. When a member rejoins, `active_members` increases by 1 while `total_members` is invariant.
+    #[test]
+    fn member_counters_match_reality_across_lifecycle(
+        num_candidates in 2usize..=8,
+        ops in prop::collection::vec((0usize..8, 0u8..2), 5..=30),
+    ) {
+        let (env, client) = contract_with_treasury(100_000 * FEE);
+        let contract_id = client.address.clone();
+        let token_id = client.get_token();
+        let token_mint = token::StellarAssetClient::new(&env, &token_id);
+
+        let candidates: std::vec::Vec<Address> = (0..num_candidates)
+            .map(|_| {
+                let addr = Address::generate(&env);
+                token_mint.mint(&addr, &(100 * FEE));
+                addr
+            })
+            .collect();
+
+        // Initial state before any registrations:
+        prop_assert_eq!(client.get_total_members(), 0);
+        prop_assert_eq!(client.get_active_members(), 0);
+
+        for (cand_raw_idx, op_type) in ops {
+            let cand_idx = cand_raw_idx % num_candidates;
+            let member = &candidates[cand_idx];
+
+            let active_before = client.get_active_members();
+            let total_before = client.get_total_members();
+
+            // Check current status from storage
+            let current_status = env.as_contract(&contract_id, || {
+                crate::storage::get_member(&env, member).map(|rec| rec.status)
+            });
+
+            match op_type {
+                0 => {
+                    // Try Join / Rejoin
+                    match current_status {
+                        None => {
+                            // First-time join: both active and total must increment by 1
+                            let res = client.try_register_member(member);
+                            prop_assert!(res.is_ok());
+                            prop_assert_eq!(client.get_active_members(), active_before + 1);
+                            prop_assert_eq!(client.get_total_members(), total_before + 1);
+                        }
+                        Some(MemberStatus::Inactive) => {
+                            // Rejoining previously exited member: active increments by 1, total is invariant
+                            let res = client.try_register_member(member);
+                            prop_assert!(res.is_ok());
+                            prop_assert_eq!(client.get_active_members(), active_before + 1);
+                            prop_assert_eq!(client.get_total_members(), total_before);
+                        }
+                        Some(MemberStatus::ActiveMember) => {
+                            // Already active: registration must be rejected with AlreadyMember, counters unchanged
+                            let res = client.try_register_member(member);
+                            prop_assert_eq!(res, Err(Ok(crate::Error::AlreadyMember)));
+                            prop_assert_eq!(client.get_active_members(), active_before);
+                            prop_assert_eq!(client.get_total_members(), total_before);
+                        }
+                    }
+                }
+                _ => {
+                    // Try Exit
+                    match current_status {
+                        Some(MemberStatus::ActiveMember) => {
+                            // Active member exits: active decrements by 1, total is invariant
+                            let res = client.try_exit_dao(member);
+                            prop_assert!(res.is_ok());
+                            prop_assert_eq!(client.get_active_members(), active_before - 1);
+                            prop_assert_eq!(client.get_total_members(), total_before);
+                        }
+                        _ => {
+                            // Non-member or inactive member cannot exit: rejected, counters unchanged
+                            let res = client.try_exit_dao(member);
+                            prop_assert!(res.is_err());
+                            prop_assert_eq!(client.get_active_members(), active_before);
+                            prop_assert_eq!(client.get_total_members(), total_before);
+                        }
+                    }
+                }
+            }
+
+            // Invariant check against ground-truth storage at every step
+            let (ground_truth_total, ground_truth_active) = env.as_contract(&contract_id, || {
+                let member_addrs = crate::storage::get_members(&env);
+                let total = member_addrs.len() as u32;
+                let active = member_addrs
+                    .iter()
+                    .filter(|m| {
+                        crate::storage::get_member(&env, &m)
+                            .map(|rec| rec.status == MemberStatus::ActiveMember)
+                            .unwrap_or(false)
+                    })
+                    .count() as u32;
+                (total, active)
+            });
+
+            prop_assert_eq!(client.get_total_members(), ground_truth_total);
+            prop_assert_eq!(client.get_active_members(), ground_truth_active);
+            prop_assert!(client.get_active_members() <= client.get_total_members());
+        }
     }
 }
