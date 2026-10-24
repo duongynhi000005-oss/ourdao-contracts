@@ -44,7 +44,7 @@ This repository is one of three that make up OurDAO:
 - **Lending** — members request loans that go through a fixed editable draft phase, then member voting weighted by stake-boosted voting power. On reaching the consensus threshold the loan is automatically approved and the principal disbursed from the treasury — no separate "execute" step. Interest is computed from a loan-size-relative-to-treasury curve, clamped to the policy's min/max rate. Repaying a loan returns the principal to the treasury and splits the interest across all active members as claimable yield.
 - **Loan defaults** — an overdue loan (past `due_time` plus a configurable grace period) can be marked defaulted by **anyone**, not just an admin — an on-chain keeper pattern. Defaulting slashes a policy-defined share of the borrower's treasury claim and frees their `has_active_loan` flag, so they can still exit the DAO with their reduced share or borrow again after the normal cooldown. This closes what was previously the DAO's most notable functional gap: prior to this, an overdue loan had zero on-chain consequence.
 - **Treasury** — any member can propose a withdrawal to any destination; execution requires a higher (60%) consensus than loan approval, reflecting the larger blast radius of moving treasury funds arbitrarily.
-- **Safety** — admin pause/unpause blocks all state-changing operations instantly (except loan repayments, which remain available to prevent forcing borrowers into default), and extensive view functions let any client inspect full DAO state without needing an indexer for real-time reads.
+- **Safety & emergency pause** — a two-tier emergency stop system allows either an admin or an assigned **Emergency Pauser** role (`set_pauser` / `revoke_pauser`, #184) to call `pause()` and freeze all disbursements, proposals, withdrawals, and staking immediately upon discovering an exploit. To prevent privilege escalation, only admins can call `unpause()` (#319). Loan repayments (`repay_loan`, `repay_loan_partial`) remain deliberately unpaused during emergency halts so borrowers are never forced into default through no fault of their own.
 
 ## Additional feature modules
 
@@ -101,7 +101,9 @@ All entrypoints are on the `OurDao` contract (`lib.rs`). Errors are the numeric 
 | `add_admin(caller, admin)` / `remove_admin(caller, admin)` | Admin-only. The last admin can never be removed. |
 | `set_consensus_threshold(caller, threshold)` | Admin-only, basis points. |
 | `set_loan_policy(caller, policy)` | Admin-only. |
-| `pause(caller)` / `unpause(caller)` | Admin-only emergency stop. |
+| `pause(caller)` | Emergency stop. Callable by any admin or the assigned emergency pauser (#184). |
+| `unpause(caller)` | Resume operations. Restricted strictly to admins (#319). |
+| `set_pauser(caller, pauser)` / `revoke_pauser(caller)` | Admin-only. Configures or revokes the dedicated emergency pauser role (#184). |
 | `propose_token_addition(caller, token)` / `execute_token_addition(caller, token)` | Admin-only. Whitelists an extra treasury asset after the 48h `TIMELOCK_DURATION`. The base `token` is always whitelisted. |
 | `remove_token(caller, token)` | Admin-only. Blocks new loans/withdrawals in `token`; loans already issued in it stay repayable. The base token can't be removed. |
 
