@@ -3,8 +3,9 @@
 //! an IPFS CID or SHA-256 digest) against a proposal. The bytes live
 //! off-chain; the chain proves which document a proposal referred to.
 
-use soroban_sdk::{symbol_short, Address, Bytes, Env};
+use soroban_sdk::{Address, Bytes, Env};
 
+use crate::events;
 use crate::error::Error;
 use crate::storage::{self, ProposalKind};
 use crate::types::ProposalPhase;
@@ -64,7 +65,7 @@ pub fn attach_document(
 
     storage::set_doc(env, kind, proposal_id, &content_hash);
     env.events()
-        .publish((symbol_short!("doc_attn"),), (kind, proposal_id, caller));
+        .publish((events::DOC_ATTN,), (kind, proposal_id, caller));
     Ok(())
 }
 

@@ -3,8 +3,9 @@
 //! funds are tracked separately from the treasury and are never lent out or
 //! distributed as yield.
 
-use soroban_sdk::{symbol_short, Address, Env};
+use soroban_sdk::{Address, Env};
 
+use crate::events;
 use crate::error::Error;
 use crate::storage;
 use crate::types::{ProposalPhase, ProposalStatus};
@@ -35,7 +36,7 @@ pub fn stake(env: &Env, member: Address, amount: i128) -> Result<(), Error> {
     let voting_weight = util::voting_weight(env, &member);
     util::token_client(env).transfer(&member, util::contract_address(env), &amount);
     env.events().publish(
-        (symbol_short!("staked"),),
+        (events::STAKED,),
         (member, amount, new_stake, voting_weight),
     );
     Ok(())
@@ -124,7 +125,7 @@ pub fn unstake(env: &Env, member: Address, amount: i128) -> Result<(), Error> {
     let voting_weight = util::voting_weight(env, &member);
     util::token_client(env).transfer(&util::contract_address(env), &member, &amount);
     env.events().publish(
-        (symbol_short!("unstaked"),),
+        (events::UNSTAKED,),
         (member, amount, new_stake, voting_weight),
     );
     Ok(())

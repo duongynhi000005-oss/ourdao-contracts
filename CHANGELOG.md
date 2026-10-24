@@ -15,6 +15,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `staked` and `unstaked` events now include the resulting voting weight (#348).
 
 ### Added
+- Centralize all event topic symbols in contracts/dao/src/events.rs and replace inline symbol_short! usages (#247).
 - Test verifying loan default and slashing for loans in a non-base asset, confirming 20% penalty is slashed from base-token contribution and asset balances remain uncorrupted (#287).
 - Full lifecycle integration test for loans in a non-base whitelisted asset covering request, edit, multi-member voting, disbursement, partial repayment, full repayment, and per-asset yield isolation (#286).
 - Boundary tests verifying state transitions at exact editing, voting, reveal, and default grace deadlines (t = deadline - 1, t = deadline, t = deadline + 1) (#299).
@@ -46,6 +47,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 
 
 ### Added
+- Centralize all event topic symbols in contracts/dao/src/events.rs and replace inline symbol_short! usages (#247).
 - Test verifying loan default and slashing for loans in a non-base asset, confirming 20% penalty is slashed from base-token contribution and asset balances remain uncorrupted (#287).
 - `make costs` and `tests/costs.rs`: per-entrypoint CPU, memory, ledger I/O, event size and fee estimates measured against the optimized wasm, plus how votes and `exit_dao` scale with membership; `make size` reports raw and optimized wasm size (#357, #358).
 - Multi-token treasury (#236): `request_loan_in_asset`, `repay_loan_in_asset`, `propose_withdrawal_in_asset`, `get_treasury_balance_in_asset`, and the token whitelist (`propose_token_addition` / `execute_token_addition` behind the 48h timelock, `remove_token`, `is_token_whitelisted`, `get_whitelisted_tokens`). The base token is always whitelisted. New append-only error codes 83–87 and events `loan_asst`, `tre_asset`, `tok_prop`, `tok_add`, `tok_rem`.

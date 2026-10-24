@@ -1,5 +1,6 @@
-use soroban_sdk::{symbol_short, Address, Env};
+use soroban_sdk::{Address, Env};
 
+use crate::events;
 use crate::error::Error;
 use crate::storage::{self, extend_instance};
 use crate::types::{Member, MemberLoanStats, MemberOverview, MemberStatus, StakingRewardClaimed};
@@ -67,7 +68,7 @@ pub fn register_member(env: &Env, member: Address) -> Result<(), Error> {
     util::token_client(env).transfer(&member, util::contract_address(env), &fee);
 
     env.events()
-        .publish((symbol_short!("joined"),), (member, fee));
+        .publish((events::JOINED,), (member, fee));
     Ok(())
 }
 
@@ -130,7 +131,7 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
             .persistent()
             .remove(&storage::DataKey::NameOf(member.clone()));
         env.events()
-            .publish((symbol_short!("name_rel"),), (name, member.clone()));
+            .publish((events::NAME_REL,), (name, member.clone()));
     }
 
     record.status = MemberStatus::Inactive;
@@ -160,7 +161,7 @@ pub fn exit_dao(env: &Env, member: Address) -> Result<(), Error> {
     }
 
     env.events()
-        .publish((symbol_short!("exited"),), (member, share, pending));
+        .publish((events::EXITED,), (member, share, pending));
     Ok(())
 }
 
@@ -179,7 +180,7 @@ pub fn claim_rewards(env: &Env, member: Address) -> Result<i128, Error> {
     util::token_client(env).transfer(&util::contract_address(env), &member, &pending);
     let now = env.ledger().timestamp();
     env.events().publish(
-        (symbol_short!("claimed"), member.clone(), pending),
+        (events::CLAIMED, member.clone(), pending),
         StakingRewardClaimed {
             member,
             amount: pending,
@@ -215,7 +216,7 @@ pub fn claim_rewards_in_asset(env: &Env, member: Address, asset: Address) -> Res
     client.transfer(&util::contract_address(env), &member, &pending);
     let now = env.ledger().timestamp();
     env.events().publish(
-        (symbol_short!("claimed"), member.clone(), pending),
+        (events::CLAIMED, member.clone(), pending),
         StakingRewardClaimed {
             member,
             amount: pending,
@@ -311,6 +312,6 @@ pub fn delegate_vote(env: &Env, delegator: Address, delegatee: Address) -> Resul
 
     storage::set_delegation(env, &delegator, &delegatee);
     env.events()
-        .publish((symbol_short!("delegate"),), (delegator, delegatee));
+        .publish((events::DELEGATE,), (delegator, delegatee));
     Ok(())
 }

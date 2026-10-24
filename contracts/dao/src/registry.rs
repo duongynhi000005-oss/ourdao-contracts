@@ -1,8 +1,9 @@
 //! Name registry. Maps human-readable names to addresses (and back), so
 //! members and the DAO itself can be referenced by name on-chain.
 
-use soroban_sdk::{symbol_short, Address, Env, String};
+use soroban_sdk::{Address, Env, String};
 
+use crate::events;
 use crate::error::Error;
 use crate::storage::{self, DataKey};
 use crate::types::{NAME_MAX_LEN, NAME_MIN_LEN};
@@ -55,13 +56,13 @@ pub fn register_name(env: &Env, owner: Address, name: String) -> Result<(), Erro
             // Announce the release so the set of free names is
             // reconstructable from the event log alone (issue #124).
             env.events()
-                .publish((symbol_short!("name_rel"),), (old, owner.clone()));
+                .publish((events::NAME_REL,), (old, owner.clone()));
         }
     }
 
     storage::set_name(env, &name, &owner);
     env.events()
-        .publish((symbol_short!("name_reg"),), (name, owner));
+        .publish((events::NAME_REG,), (name, owner));
     Ok(())
 }
 
